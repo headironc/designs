@@ -45,7 +45,9 @@ Nucleus 的实现进入 dev；固定候选经整体验收后晋级 main，不将
 
 Draft/Ready 表达准备状态，不是另一种依赖结构。Draft 阶段提供必要开发反馈；进入正式审查与合并准备时，补齐规定的覆盖。状态变化不能免除已知发现的处置。
 
-合并方式独立选择。普通实现和 stack 可评估 squash，每片保留一个完整业务提交；这仍是建议。晋级使用保留既定父关系的 merge commit。不能用所有 PR 统一 squash 破坏发布图，也不能只因分支数量增加就使用 stack。
+已选合并方式为：普通实现 PR 和原生 stack 使用 squash，每片落地为一个完整业务提交；Nucleus dev 到 main 晋级使用保留既定父关系的 merge commit。原生 stack 合并 n 个 PR 时产生 n 个 squash 提交，并作为同一原子操作落地，不将整个前缀压成一个提交。[Stack 合并方式](https://docs.github.com/en/pull-requests/reference/stacked-pull-requests#merge-methods)
+
+方法绑定到对应业务路径和集成计划。为了晋级而允许 merge commit，不代表普通实现也可绕过已选 squash 规则；不能只在控制器请求中写 squash，却忽略其他实际入口。所选片须核目标分支、平台配置和各入口如何执行该规则，再验证准确结果。不能用全仓库只开 squash 破坏晋级父关系，也不能只因分支数量增加就使用 stack。
 
 ## 职责与信任边界
 
@@ -378,7 +380,7 @@ Nucleus 固定 `ghcr.io/headironc/kiln@sha256:…`，job 仅取得所需 `packag
 
 ## 待收敛的决定
 
-1. 普通实现与 stack 的合并方式，以及固定晋级的具体入口。
+1. 普通实现与 stack 已选 squash，晋级已选保留约定父关系的 merge commit；各路径的配置映射和固定晋级入口仍须绑定。
 2. 可信控制器推荐 dev 常驻单写者与 SQLite；部署身份、备份和维护责任须随所选实施片绑定，推荐不等于部署授权。
 3. 各合并路径相对既有异步契约的新增效果、风险与信任边界；相同范围不重复选择。
 4. runner 已选仓库级不可信池，接受非预期 job 的计算占用余险；隔离、凭据边界、证据拒绝和完整回收仍是启用前提。
