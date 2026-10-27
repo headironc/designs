@@ -13,5 +13,5 @@
     "allowImportingTsExtensions": true,
     "types": ["node"]
   },
-  "include": ["ci/**/*.ts"]
+  "include": ["ci/**/*.ts", "policy/**/*.ts"]
 }

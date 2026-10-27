@@ -13,6 +13,12 @@ function tool(inputs: BoundInputs, name: string, version: string): Tool {
 /** Designs owns its actual document corpus and validation obligations. */
 export function designsChecks(inputs: BoundInputs): Check[] {
   BoundInputs.requireVerified(inputs);
+  if (
+    inputs.target.repository !== "headironc/designs" ||
+    inputs.target.repositoryId !== "1434658318" ||
+    inputs.target.target !== "main"
+  )
+    throw new Error("Inputs do not identify the designs main policy");
   const { policy, candidate } = inputs.paths;
   const documents = inputs.source.entries
     .filter((entry) => entry.path.endsWith(".md"))
