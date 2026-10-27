@@ -16,7 +16,7 @@ import { pathToFileURL } from "node:url";
 import { fileDigest } from "./binding.ts";
 import type { SourcePin } from "./contract.ts";
 
-test("candidate snapshots preserve executable meaning across private and protected modes", async (t) => {
+test("candidate binding preserves source identity and complete changes", async (t) => {
   const root = mkdtempSync("/tmp/designs-candidate-binding-");
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const policy = path.join(root, "policy"),
@@ -129,4 +129,41 @@ test("candidate snapshots preserve executable meaning across private and protect
   chmodSync(path.join(candidate, "README.md"), 0o644);
   writeFileSync(path.join(candidate, "README.md"), "Changed candidate\n");
   assert.throws(() => inputs.verifyCandidate(candidate), /does not match/);
+
+  await t.test("renames retain both paths across business scopes", () => {
+    git(candidate, "restore", "README.md");
+    mkdirSync(path.join(candidate, "src"));
+    mkdirSync(path.join(candidate, "docs"));
+    writeFileSync(path.join(candidate, "src", "removed.rs"), "");
+    git(candidate, "add", ".");
+    git(candidate, "commit", "--quiet", "-m", "baseline source");
+    const base = git(candidate, "rev-parse", "HEAD");
+    git(candidate, "mv", "src/removed.rs", "docs/renamed.md");
+    git(candidate, "commit", "--quiet", "-m", "rename across scopes");
+    const head = git(candidate, "rev-parse", "HEAD");
+    const tree = git(candidate, "rev-parse", "HEAD^{tree}");
+    const integration = git(
+      candidate,
+      "commit-tree",
+      tree,
+      "-p",
+      base,
+      "-p",
+      head,
+      "-m",
+      "integration",
+    );
+    git(candidate, "checkout", "--quiet", "--detach", integration);
+    const renamed = BoundInputs.verify(
+      inputs.composition,
+      { event: "pull_request_target", base, head, integration, tree },
+      inputs.paths,
+      bundle,
+      inputs.target,
+    );
+    assert.deepEqual(renamed.changedPaths, [
+      "docs/renamed.md",
+      "src/removed.rs",
+    ]);
+  });
 });

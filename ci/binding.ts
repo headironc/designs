@@ -338,6 +338,8 @@ export class BoundInputs {
             "diff",
             "--no-ext-diff",
             "--no-textconv",
+            // Business selection must see removals as well as rename destinations.
+            "--no-renames",
             "--name-only",
             "-z",
             candidate.base,
