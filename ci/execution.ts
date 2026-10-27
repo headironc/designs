@@ -3,6 +3,7 @@ import {
   chmodSync,
   chownSync,
   cpSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -12,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { BoundInputs, fileDigest, hostedRun } from "./binding.ts";
+import { BoundInputs, fileDigest, git, hostedRun } from "./binding.ts";
 import {
   CheckSchema,
   ExecutionReportSchema,
@@ -48,6 +49,13 @@ function candidateOutput(file: string, root: string): boolean {
     below(file, root) &&
     ![".git", ".shared"].includes(path.relative(root, file).split(path.sep)[0]!)
   );
+}
+
+function physicalOutputParent(file: string): void {
+  let directory = path.dirname(file);
+  while (!existsSync(directory)) directory = path.dirname(directory);
+  if (realpathSync(directory) !== directory)
+    throw new Error("Candidate output traverses a symlink");
 }
 
 function protectedParents(file: string): void {
@@ -183,16 +191,26 @@ export class VerifiedExecution {
         "Report directory must be supervisor-private and outside all inputs",
       );
     for (const copy of options.preparation.copies) {
+      // Candidate typechecks need the same static imports, without gaining the live S identity.
+      const sharedInput =
+        copy.from === shared && copy.to === path.join(candidate, ".shared");
       if (
-        (!below(copy.from, policy) && !below(copy.from, shared)) ||
-        !candidateOutput(copy.to, candidate)
+        (sharedInput
+          ? git(candidate, ["ls-files", "--", ".shared"]) !== "" ||
+            git(candidate, ["check-ignore", ".shared/"]) !== ".shared/"
+          : (!below(copy.from, policy) && !below(copy.from, shared)) ||
+            !candidateOutput(copy.to, candidate)) ||
+        copy.from.split(path.sep).includes(".git")
       )
         throw new Error("Unbound dependency copy");
+      physicalOutputParent(copy.to);
       cpSync(copy.from, copy.to, {
         recursive: true,
         errorOnExist: true,
         force: false,
         verbatimSymlinks: true,
+        filter: (file) =>
+          !path.relative(copy.from, file).split(path.sep).includes(".git"),
       });
     }
     for (const root of [policy, shared, candidate]) {
@@ -220,6 +238,7 @@ export class VerifiedExecution {
     for (const output of options.preparation.writable) {
       if (!candidateOutput(output, candidate))
         throw new Error("Unbound writable candidate output");
+      physicalOutputParent(output);
       mkdirSync(output, { mode: 0o700 });
       chownSync(output, identity.uid, identity.gid);
     }
