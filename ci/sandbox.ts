@@ -16,6 +16,28 @@ export type CiCommand = {
 };
 export type CandidateIdentity = { uid: number; gid: number; group: string };
 
+// Keep both the first failure context and final summary without retaining an unbounded log.
+class OutputExcerpt {
+  private head = Buffer.alloc(0);
+  private tail = Buffer.alloc(0);
+  private bytes = 0;
+
+  append(chunk: Buffer): void {
+    this.bytes += chunk.length;
+    const headBytes = Math.min(chunk.length, 16 * 1024 - this.head.length);
+    this.head = Buffer.concat([this.head, chunk.subarray(0, headBytes)]);
+    this.tail = Buffer.concat([this.tail, chunk.subarray(headBytes)]).subarray(
+      -16 * 1024,
+    );
+  }
+
+  text(): string {
+    const omitted = this.bytes - this.head.length - this.tail.length;
+    if (!omitted) return Buffer.concat([this.head, this.tail]).toString("utf8");
+    return `${this.head.toString("utf8")}\n[${omitted} output bytes omitted]\n${this.tail.toString("utf8")}`;
+  }
+}
+
 export function protect(directory: string): void {
   const stat = lstatSync(directory);
   if (stat.isSymbolicLink()) return;
@@ -178,6 +200,7 @@ export async function runIsolated(
   status: number | null;
   signal: string | null;
   error: string | null;
+  stdout: string;
   stderr: string;
   timedOut: boolean;
   cancelled: boolean;
@@ -202,8 +225,9 @@ export async function runIsolated(
         timedOut = false,
         cancelled = false;
       let error: string | null = null,
-        stderr = "",
         bytes = 0;
+      const stdout = new OutputExcerpt();
+      const stderr = new OutputExcerpt();
       const terminate = () => {
         child.kill("SIGKILL");
       };
@@ -223,20 +247,17 @@ export async function runIsolated(
       child.once("error", (cause) => {
         error = cause.message;
       });
-      child.stdout.on("data", (chunk: Buffer) => {
+      const capture = (output: OutputExcerpt, chunk: Buffer) => {
         bytes += chunk.length;
+        output.append(chunk);
         if (bytes > 32 * 1024 * 1024) {
           error = "Candidate output exceeded 32 MiB";
           terminate();
         }
-      });
+      };
+      child.stdout.on("data", (chunk: Buffer) => capture(stdout, chunk));
       child.stderr.on("data", (chunk: Buffer) => {
-        bytes += chunk.length;
-        stderr = (stderr + chunk.toString("utf8")).slice(-2000);
-        if (bytes > 32 * 1024 * 1024) {
-          error = "Candidate output exceeded 32 MiB";
-          terminate();
-        }
+        capture(stderr, chunk);
       });
       // A descendant can inherit the pipes. Kill the whole identity when the original child exits,
       // before waiting for close, rather than waiting forever for the descendant's pipe handles.
@@ -248,8 +269,12 @@ export async function runIsolated(
           settlement =
             cause instanceof Error ? cause : new Error(String(cause));
         }
-        child.stdout.destroy();
-        child.stderr.destroy();
+        // Settled processes have closed their writers; let Node drain buffered output before close.
+        // An unsettled descendant may retain a writer, so only that failure abandons the pipes.
+        if (settlement) {
+          child.stdout.destroy();
+          child.stderr.destroy();
+        }
       });
       child.once("close", (status, exitSignal) => {
         clearTimeout(timer);
@@ -261,7 +286,8 @@ export async function runIsolated(
           status,
           signal: exitSignal,
           error,
-          stderr,
+          stdout: stdout.text(),
+          stderr: stderr.text(),
           timedOut,
           cancelled,
           settled: !settlement,

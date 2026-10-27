@@ -47,6 +47,11 @@ childProcess.spawn = () => {
   child.kill = () => true;
   queueMicrotask(() => {
     child.emit("spawn");
+    if (scenario === "split-output") {
+      const message = Buffer.from("not ok 1 - 中文 assertion\n");
+      for (const byte of message) child.stdout.write(Buffer.from([byte]));
+      child.stderr.write("Incomplete coverage\n");
+    }
     child.emit("exit", 0, null);
     child.emit("close", 0, null);
   });
@@ -71,10 +76,19 @@ if (scenario === "query-before") {
   assert.equal(started, false);
 } else {
   const result = await run();
-  assert.equal(result.settled, scenario === "delayed");
+  assert.equal(
+    result.settled,
+    scenario === "delayed" || scenario === "split-output",
+  );
+  if (scenario === "split-output") {
+    assert.equal(result.stdout, "not ok 1 - 中文 assertion\n");
+    assert.equal(result.stderr, "Incomplete coverage\n");
+    assert.equal(result.error, null);
+  }
   if (scenario === "query-after")
     assert.match(result.error, /identity cannot be verified/);
-  else if (scenario !== "delayed") assert.match(result.error, /cleanup|query/);
+  else if (scenario !== "delayed" && scenario !== "split-output")
+    assert.match(result.error, /cleanup|query/);
   assert.deepEqual(
     calls.filter((call) => call[0] === "/usr/bin/pkill"),
     [

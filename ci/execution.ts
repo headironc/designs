@@ -328,7 +328,11 @@ export class VerifiedExecution {
           cancelled: result.cancelled,
           settled: result.settled,
           error: result.error,
-          diagnostic: result.stderr,
+          // Store candidate output as data in the private report, never as runner log commands.
+          diagnostic: JSON.stringify({
+            stdout: result.stdout,
+            stderr: result.stderr,
+          }),
         });
         if (result.settled) rmSync(scratch, { recursive: true, force: true });
       } catch (cause) {
