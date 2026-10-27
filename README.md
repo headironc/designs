@@ -1,10 +1,10 @@
 # Designs
 
-本仓库保存 agents、Nucleus、Halo 与 Kiln 的跨仓库设计，以及 [runner 自有 Go 实现](runner/README.md)。设计记录方案、权衡和明确决策；代码按独立业务结果交付。
+本仓库维护跨仓库设计、[共享 CI 执行器](ci/contract.ts)、[本库文档检查策略](policy/docs.ts)，以及 [runner 自有 Go 实现](runner/README.md)。agents、Nucleus 与 designs 分别维护业务检查，消费同一固定执行器。代码按独立业务结果交付。
 
 ## 当前设计
 
-- [CI、审查、准入与运行体系](ci-architecture.md)：跨库架构的唯一正文。当前先完成架构及两库采纳合同；已选的首个实现片是可信 CI 执行与报告，agents 与 Nucleus 的产品 WIP 保全。runner 的 Python 流程已停止，原操作与恢复现场保留；Go 停接、正常启动、guard watchdog 与 GARM client 已合入，本片交付 watchdog 的 systemd 停止请求及原 job 恢复。
+- [CI、审查、准入与运行体系](ci-architecture.md)：跨库架构的唯一正文。当前 CI 片交付 designs 维护的唯一执行器及三库真实消费；Nucleus 限于四项 Docs 检查。runner 的 Python 流程已停止，原操作与恢复现场保留；Go 停接、正常启动、guard watchdog 与 GARM client 已合入，独立 runner 片交付 watchdog 的 systemd 停止请求及原 job 恢复。
 - [Rust 与 Halo 共用 runner](ci-architecture.md#runner-与-kiln)：共用基础设施、两层镜像、不可信池边界、生命周期、缓存和接入验收；文档收录不表示已部署。
 - [Runner 的 Go 结构与实施切片](runner/architecture.md)：自有代码职责、已采用的 Go 包、协议与恢复边界，以及小 PR 顺序。[Guard watchdog](runner/guard-watchdog.md) 已交付观察、状态持久化及调用切换；[异常停接](runner/watchdog.md) 本片接入 go-systemd，保留写前记录和未知结果不重发语义，其余按片推进。
 

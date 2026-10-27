@@ -1,8 +1,8 @@
 # Nucleus 与 agents CI 全面设计草案
 
-本方案覆盖普通 PR、原生 stack、Nucleus 晋级、可信审查与准入、控制器恢复，以及 Kiln 和 Halo VM runner 的接入。本文是跨仓库架构的唯一正文。agents 维护共同机制及自身消费合同，Nucleus 维护自身业务检查与部署合同。完整目标保留，尚未验证的设计不作为已交付保证。
+本方案覆盖普通 PR、原生 stack、Nucleus 晋级、可信审查与准入、控制器恢复，以及 Kiln 和 Halo VM runner 的接入。本文是跨仓库架构的唯一正文。designs 维护唯一共享执行器 S；agents、Nucleus 和 designs 分别维护业务策略 P 及消费合同。完整目标保留，尚未验证的设计不作为已交付保证。
 
-当前先完成架构和采纳合同，再继续已经选定的可信 CI 执行与报告片。该片以 agents 的实际 checks 工作流为首个消费者。只读资格核验、批准与失效及完整恢复、准确授权合并分别是后续片。原 PR270 和 Nucleus 准备 WIP 保全，停止扩大产品实现。runner 已批准的独立凭据入口继续准备；固定入口审阅通过后才交付宿主命令。文档收录不授予新的发布、配置、凭据或合并权限。
+当前片交付同一准确 S 的三个真实消费者。agents 保留最低检查、installer 和候选完整检查，Nucleus 限于四项 Docs，designs 执行自身文档检查。三库组合验收后分别发布实现 PR，完成正式审查、修复和普通合并。只读资格核验、批准、准入与控制器恢复仍是后续片。原操作及未知结果保留原来源，不随本片迁移。runner 独立工作继续按其已选边界推进；本片不指定新的平台可信来源或启用 VM。
 
 ## 已确定的目标与边界
 
@@ -67,31 +67,31 @@ Draft/Ready 表达准备状态，不是另一种依赖结构。Draft 阶段提�
 | Kiln 发布 | 构建来源、产物、registry digest 和消费兼容性 |
 | 控制器部署 | 可信版本激活、在途兼容、升级与恢复 |
 
-共享实现放在 agents，Nucleus 的业务要求仍由 Nucleus 文档与配置拥有。候选执行不得取得 App 私钥、管理会话、控制服务 socket 或可写发布目录。可信控制面读取有界数据，不执行候选 artifact 中的代码。
+共享实现放在 designs，三个消费者各自拥有业务要求。候选执行不得取得 App 私钥、管理会话、控制服务 socket 或可写发布目录。可信控制面读取有界数据，不执行候选 artifact 中的代码。
 
 ### 业务策略、共同实现与平台部署
 
 | 所有者 | 拥有的事实 | 消费边界 |
 | --- | --- | --- |
-| 仓库业务策略 P | 检查选择、完整业务配方、允许目标、工具和环境要求、业务结果核验 | agents 拥有最低检查及两平台配方；Nucleus 拥有 Docs、Rust 消费闭包、group/shard、Halo 及依赖准备 |
-| agents 共同实现 S | 来源身份、隔离执行、进程结清、监督报告、平台证据来源，以及后续准入与原操作恢复 | 接收固定 P 提供的具体义务；共同算法不导入 Nucleus 业务类型，也不内嵌 agents 的 main 或检查清单 |
+| 仓库业务策略 P | 检查选择、完整业务配方、允许目标、工具和环境要求、业务结果核验 | agents 拥有最低检查及两平台配方；Nucleus 拥有 Docs、Rust 消费闭包、group/shard、Halo 及依赖准备；designs 拥有文档语句、编号和链接检查 |
+| designs 共同实现 S | 来源身份、隔离执行、进程结清、监督报告、平台证据来源及上传恢复 | 接收固定 P 提供的具体义务；共同算法不导入消费者业务类型，也不内嵌 main 或检查清单；后续准入按独立片交付 |
 | 配置维护者 | 准确仓库与安装、冻结来源、workflow、Environment、平台保护、最小权限及激活 | 使用独立受信来源核部署；候选、事件输入或报告不能指定新来源 |
 
-P 和 S 是不同事实的身份，不要求两个消费者分别搭建框架。agents 的 P/S 可处于同一已审提交；Nucleus 的 P 与 agents 的 S 分别绑定 commit、tree 和依赖锁。静态入口调用已验证的 S，固定配方以参数交给共同执行层。不同业务报告保留自身含义，不为统一格式而重写业务规则，也不支持从候选或事件路径动态加载插件。
+P 和 S 是不同事实的身份，三个消费者不分别搭建框架。各自固定 P 的 commit、tree 和依赖锁，并消费同一 designs S 分发。designs 自身也使用独立的 P/S checkout 和身份。静态入口调用已验证的 S，固定配方以参数交给共同执行层。不同业务报告保留自身含义，不为统一格式而重写业务规则，也不支持从候选或事件路径动态加载插件。
 
-共同实现的采纳及运行合同由 agents 的 `docs/admission-controller.md` 维护。agents 的 `docs/tooling.md` 拥有本库选检和执行要求，`docs/review-gate.md` 拥有实际保护与迁移状态。Nucleus 的 `docs/engineering/verification.md`、`review-gate.md` 和 `delivery.md` 分别拥有业务验证、准入接入及交付边界。产品文档引用本设计的固定修订，运行程序不读取 designs 的可变分支。
+共同类型与验证由 designs 的 [ci/contract.ts](ci/contract.ts)、[binding.ts](ci/binding.ts) 和 [execution.ts](ci/execution.ts) 维护。agents 的 `docs/admission-controller.md` 记录本库采纳，`docs/tooling.md` 拥有选检要求，`docs/review-gate.md` 拥有实际保护与迁移状态。Nucleus 的 `docs/engineering/verification.md`、`review-gate.md` 和 `delivery.md` 分别拥有业务验证、准入接入及交付边界。产品文档引用本设计的固定修订，运行程序不读取 designs 的可变分支。
 
-### 两个实际消费者的调用合同
+### 三个实际消费者的调用合同
 
 本合同落实上表职责，不改变 P/S 的信任边界。agents 已合入源码仍在共同入口内构造本库配方，并固定 `main` 与 `check.yml`。这些规则归回 agents 的 P；共同层接收固定 P 的具体调用。依据是 [ci-execute.ts](https://github.com/headironc/agents/blob/585c84e97c3a90bad5ba4e2a61802af173ea9a70/scripts/ci-execute.ts) 与 [监督报告结构](https://github.com/headironc/agents/blob/585c84e97c3a90bad5ba4e2a61802af173ea9a70/scripts/check-report.ts)。该提交只绑定已合入源码，不指定可信运行来源。
 
-当前消费者是 agents 的两平台检查与 Nucleus 的 Docs 首片。P 通过固定静态入口调用同一个 S，不从候选加载执行计划或 verifier。具体类型和校验实现由 agents 的共同合同维护，两库消费同一版本。迁移时替换原调用，不保留旧 API、双接口、适配器或 fallback。原执行及上传记录仍按固定原程序恢复。
+当前消费者是 agents 的两平台检查、Nucleus 的 Docs 首片及 designs 自身文档检查。P 通过固定静态入口调用同一个 S，不从候选加载执行计划或 verifier。具体类型和校验实现只在 designs 维护，三库消费同一版本。迁移时替换原调用，不保留旧 API、双接口、适配器或 fallback。原执行及上传记录仍按固定原程序恢复。
 
 | 交给 S 的输入 | 事实所有者与校验 |
 | --- | --- |
 | 仓库、目标和生产入口 | P 声明允许的 repository ID、目标分支、事件及 workflow；部署指定其准确来源。S 核平台实际 repository、workflow ref/SHA、run/attempt/job 与声明一致。`main`、`dev` 和 workflow 路径不是 S 的常量 |
 | 准确检查对象 | S 读取实际 checkout 的 commit/tree、普通 PR 的 B/H/I 及有序父关系，并取得可信 B→I 变更清单。P 据此选择义务；未知比较保持未知并由 P 保守处理，不采用候选自报路径 |
-| P、S 与组合身份 | 部署指定 P/S 各自的 commit、tree、依赖锁及固定入口。S 核实实际源码和工具，再将完整组合与执行绑定；agents 的 P/S 可同提交，Nucleus 的 P 与 S 分别固定。包内自报身份不能指定新的可信组合 |
+| P、S 与组合身份 | 部署指定 P/S 各自的 commit、tree、依赖锁及固定入口。S 核实实际源码和工具，再将完整组合与执行绑定；三个 P 消费同一准确 S。包内自报身份不能指定新的可信组合 |
 | 具体检查项 | 固定 P 给出当前范围、唯一检查名、有序 argv、准确 runtime、cwd 和配置来源。S 核工具与路径约束后执行；候选路径仅按 P 允许的 operand 使用，P 不提交任意可执行回调 |
 | 环境与可写位置 | P 声明每项所需环境、候选输出位置和工具要求。S 分配实际 HOME/TMP、执行身份和写目录，保留只读 P/S、工具及监督器私有报告目录。P 不覆盖 S 的凭据隔离和启动保护，候选环境不继承控制凭据 |
 | 期限与取消 | P 给出该项执行期限，S 绑定本次开始时间、截止及实际取消来源。取消沿原 run/attempt/job 和子执行处理，不能因调用者停止等待就结束资源责任 |
@@ -111,11 +111,13 @@ S 接收配方后，先核来源、候选和运行边界，再启动隔离进程
 
 可信监督器拥有这些观察，候选输出只作为有界诊断或待核业务数据。共同读取器先验证平台生产者、原 run 和 artifact 及有界内容，再把核实的观察交给固定 P。P verifier 独立从可信输入重建预期，不用报告的 `planned`、`passed` 或 `settled` 字段生成自己的预期。单个布尔值不能授予观察真实性。业务结果保留各自范围，不把 Nucleus 报告强塞进 agents 的检查组。
 
-### 两条消费流程及失败恢复
+### 三条消费流程及失败恢复
 
 agents 的固定 P 拥有 `main`、`check.yml`、工具准备、installer 构建、冻结最低检查和候选完整 `all` 检查。P 为 Linux 与 macOS 分别生成完整配方，S 逐项监督并结清。P 核两种检查及两个平台的全部义务，最低检查成功不能替代候选完整检查。工具复制、构建目录及本库环境名由 P 声明，S 验证并落实隔离，避免重写现有安全保障。
 
 Nucleus 的固定 P 拥有 `dev`、自身 workflow、选检和 Docs 配方。首片仅在可信比较明确给出 Rust=`skip` 且 Halo=`skip` 时接纳 Docs 范围。P 依次要求格式、Markdown 结构、离线链接和设计预览传输检查；从固定 P 的 cwd 与配置启动，把准确候选作为输入。S 执行这四项并产生同一类真实观察，P 独立核全部四项。混合、未知或其他义务输出未覆盖，不能发布整体 Nucleus CI 成功。当前独立 P 候选用于验证这些需要，其临时类型不是共同合同的既定实现。
+
+designs 的固定 P 拥有本库完整 Markdown 清单及必需入口，运行现有 prose、编号与离线链接工具。P 核全部三项实际结果；文档成功不代表 runner 已部署或完整 Go 路线已验收。三个 P 从独立可信候选重建业务义务，远端验证时使用 S 认证的原执行路径；本地读取候选 manifest 先核准确 commit、tree 和源码条目。
 
 | 失败阶段 | 原操作与结果要求 |
 | --- | --- |
@@ -126,7 +128,7 @@ Nucleus 的固定 P 拥有 `dev`、自身 workflow、选检和 Docs 配方。首
 
 上传沿用 [ci-upload.ts](https://github.com/headironc/agents/blob/585c84e97c3a90bad5ba4e2a61802af173ea9a70/scripts/ci-upload.ts) 已有阶段及未知结果边界。上传凭据只供受信上传者使用，隔离命令不能取得。工作流被终止后缺少结清或上传回执时，保持原责任未知；后续观察不能补造原成功响应。来源分发与激活仍遵循[私有共享源码](#私有共享源码的分发与启动)，本合同不新增凭据或发布权限。
 
-接入验收使用两个真实消费者，分别验证错误来源与目标拒绝、候选启动污染拒绝、缺项与伪造观察拒绝，以及取消/超时后的结清和未知上传恢复。agents 保留两平台与最低/完整检查，Nucleus 首片证明四项 Docs 真实运行及未覆盖拒绝。Rust/Halo 的全局目标保持，但不提前为其增加插件、通用 DAG 或未被当前消费者使用的接口。
+接入验收使用三个真实消费者，分别验证错误来源与目标拒绝、候选启动污染拒绝、缺项与伪造观察拒绝，以及取消/超时后的结清和未知上传恢复。agents 保留两平台与最低/完整检查，Nucleus 首片证明四项 Docs 真实运行及未覆盖拒绝，designs 证明本库三项文档检查。一次性容器中的本地证据始终标注本地，不冒充 hosted producer 或平台 artifact。Rust/Halo 的全局目标保持，但不提前为其增加插件、通用 DAG 或未被当前消费者使用的接口。
 
 ### 一次普通 PR 的事实流
 
@@ -142,7 +144,7 @@ Nucleus 的固定 P 拥有 `dev`、自身 workflow、选检和 Docs 配方。首
 
 当前 Nucleus 的相邻共享 checkout 只支持本地组合，尚未构成可部署的 S 来源。已有 `dev-admission` 与 `main-promotion` Environment 均限制 dev；它们不证明冻结控制分支可取得凭据。现有安装的历史读取成功也不证明新的范围授权仍有效。
 
-本次设计建议将准确 S 随 P 的受信发布分发交付。发布准备保留 agents 原对象、commit/tree/lock、完整成员及分发摘要，独立核原审查和来源。接收端验证后离线展开为 shared。共同源码仍只在 agents 维护，Nucleus 不维护复制的控制器。格式选择使用满足真实消费者的现有归档或 Git 分发能力，不建设通用制品平台。
+准确 S 随 P 的固定组合分发交付。发布准备保留 designs 原对象、commit/tree/lock、完整成员及分发摘要，独立核原审查和来源。当前载体是原生独立 Git bundle；固定 bootstrap 核摘要、对象和成员后展开为 P 的 `.shared` checkout。共同源码只在 designs 维护，消费者不维护复制的控制器，不建设通用制品平台。
 
 建议的具体消费链如下，尚未实施或批准发布：
 
@@ -598,7 +600,7 @@ Rust 的 workflow 适配、可信检查计划及镜像消费兼容可与共同�
 
 ### 当前片：可信 CI 执行与报告
 
-单一结果是 agents 的实际 checks 消费者按冻结配方执行准确候选，产生可核来源、覆盖和终态的报告。两平台配方属于 agents 的 P；来源与执行监督属于 S。当前先完成本文与产品采纳合同，产品 WIP 保全。该片不包含批准、准入成功、合并、控制器 Activation 或新的凭据方案。
+单一结果是三个真实 P 通过同一 designs S 执行准确候选，分别核验业务范围、来源和终态。两平台配方属于 agents 的 P，四项 Docs 属于 Nucleus 的 P，本库三项文档检查属于 designs 的 P。来源与执行监督只由 S 维护。组合通过后按各库授权交付 PR、审查修复和普通合并；该片不实施批准、准入控制器、平台来源激活或新的凭据方案。
 
 | 交付项 | 接纳证据 | 失败与恢复 |
 | --- | --- | --- |

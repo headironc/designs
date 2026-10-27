@@ -1,7 +1,8 @@
 # Repository instructions
 
-This repository owns the cross-repository architecture and the Go runner source.
-Consumer repositories own their business workflows; Kiln owns task images.
+This repository owns the cross-repository architecture, the shared CI executor
+in `ci/`, its own document policy in `policy/`, and the Go runner source.
+Agents, Nucleus and designs each own their business checks. Kiln owns task images.
 
 - Read `runner/README.md` before changing runner code. Run its affected Go checks.
 - Run nft integration tests only in the documented private network namespace.
