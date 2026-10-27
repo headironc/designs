@@ -9,6 +9,7 @@ require (
 	github.com/coreos/go-systemd/v22 v22.7.0
 	github.com/go-openapi/runtime v0.29.5
 	github.com/godbus/dbus/v5 v5.1.0
+	github.com/google/go-github/v84 v84.0.0
 	golang.org/x/sys v0.49.0
 )
 
@@ -43,7 +44,6 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/golang-jwt/jwt/v4 v4.5.2 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
-	github.com/google/go-github/v84 v84.0.0 // indirect
 	github.com/google/go-querystring v1.2.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/handlers v1.5.2 // indirect
