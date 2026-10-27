@@ -1,6 +1,6 @@
 # Runner 的 Go 结构与实施切片
 
-本设计将 runner 自有实现改为 Go，并按独立业务结果交付。[专用防火墙重载](README.md)已合入，当前实现片是 [guest bootstrap](bootstrap.md)。现有 Python 快照用于行为对照和原操作恢复。GARM、LXD provider、nginx、rsyslog、Squid 和 dnsproxy 保持各自职责，不重写第三方组件。
+本设计将 runner 自有实现改为 Go，并按独立业务结果交付。[专用防火墙重载](README.md)和 [guest bootstrap](bootstrap.md) 已合入。当前实现片是 [provider 异常停接](watchdog.md)。现有 Python 快照用于行为对照和原操作恢复。GARM、LXD provider、nginx、rsyslog、Squid 和 dnsproxy 保持各自职责，不重写第三方组件。
 
 跨仓库边界由 [CI 架构](../ci-architecture.md#runner-与-kiln) 维护。designs 拥有 runner 自有程序及发布成品。Kiln 拥有任务镜像，消费仓库拥有工作流和业务检查。新代码在独立工作树准备，原接入现场和未知操作保全。
 
@@ -22,7 +22,7 @@
 | `vm-restore-guard-pin-20261026/lifecycle.py` → GitHub/GARM/LXD/宿主事实 | 一次 VM 执行的验收与故障恢复 | 绑定 run/job/attempt、agent、VM UUID、QEMU 身份及 cgroup；回收成功与任务用例通过是两个结果 |
 | staging / collect / diagnosis 入口 → 固定源码、受保护原件和公开输出 | 程序发布绑定、只读诊断与脱敏 | 发布清单不授予执行；公开文件在特权操作前独占创建；历史未知操作仍由原程序解释 |
 
-初始 guard 与后续 records-only guard 不是等价副本。初始代码还固定旧 repository URL，后续 rebind 将改变准确消费绑定。以接入 owner 交付的稳定版本补齐新 provider 的对照。最终仓库绑定以该版本为准。
+初始 guard 与后续 records-only guard 不是等价副本。初始代码仍固定旧 repository URL。rebind 修复源码已有保全版本，但实际新 repository UUID 尚未交付。watchdog 消费显式 policy 输入并以合成身份验证；部署仍依赖真实绑定和原操作终态。guard 与 records-only 后续片保留完整恢复职责，不迁用旧许可。
 
 网络、镜像和诊断安装脚本还承担配置生成与宿主部署。模板来源与部署选择分开维护，不把现有 `/etc` 配置直接入库。已按来源清单核对日志模板：`guest-logs-server.conf` 的 SHA256 为 `4b93a348815e1079c31eb4c67996d7d5248efdf080ad462d4ef43f0a0541b0ad`。它用 `omfile` 写入 `/var/log/nucleiron/guests/current.log`，安装脚本配套 logrotate。旧测试中的 omprog 路径替换不证明当前存在该消费者。运行部署状态仍以原 owner 的宿主验收为准。
 
@@ -83,8 +83,9 @@ GARM 仍负责 controller 与其数据库。自有代码通过已采用 API 和�
 | --- | --- | --- |
 | 结构说明 | 审阅者能定位职责、协议和实施顺序 | 本文及必要导航；不带历史源码大包，不带运行实现 |
 | 专用防火墙重载（已合入） | systemd 可消费 Go 入口，检查并原子替换自有 nftables 表 | 实际入口、规则读取、nft 调用、unit 消费绑定、构建与失败测试；不改端口、域名、路由、其他表或生产服务 |
-| guest bootstrap（当前实现片） | 原生 provider 渲染并启动 Go guest 程序，产出相同 ready 回执 | JIT 安装、失败反馈、guest 成品与模板绑定；不启用 ScaleSet，不改 controller 凭据 |
-| provider 准入与停止接入 | GARM 经 Go guard 执行受限 native 操作，异常时停止接入 | guard、watchdog、records-only 启动校验、原子状态及必要恢复兼容；不创建新 repository 或改变审批范围 |
+| guest bootstrap（已合入） | 原生 provider 渲染并启动 Go guest 程序，产出相同 ready 回执 | JIT 安装、失败反馈、guest 成品与模板绑定；不启用 ScaleSet，不改 controller 凭据 |
+| provider 异常停接（当前实现片） | Go watchdog 消费 guard 检查接口，异常时停止准确目标的接入 | 身份核验、禁用及读回、未知请求记录、失败停止请求；不迁移 guard 或 records-only，不启用服务 |
+| provider 准入与恢复启动校验 | GARM 经 Go guard 执行受限 native 操作，启动按准确许可准入 | guard、records-only 启动校验、原子状态及必要恢复兼容；不创建新 repository 或改变审批范围 |
 | 服务与版本安装窗口 | 在准确前态中停止服务、安装一个版本，并恢复或保留可恢复状态 | systemd 原 job、文件事务、回滚与配置漂移检查；不将通用文件复制单独提前交付 |
 | 凭据消费与连接 | 一次已绑定操作建立并验证 disabled 连接，故障后保留可解释结果 | signer、凭据证明、受保护记录、repository/ScaleSet 回执及只读恢复；稳定 rebind 到达后再确定最小闭包 |
 | VM 终态与恢复 | 对一个准确 job 区分用例通过和仅资源回收，并验证资源归零 | GitHub/GARM/LXD/进程/cgroup 证据和必要服务恢复；四种任务终态按实际接口验证，不冒充生产全验收 |
@@ -108,4 +109,4 @@ GARM 仍负责 controller 与其数据库。自有代码通过已采用 API 和�
 
 ## 交付范围
 
-结构说明随实现保持更新，运行实现按独立业务结果交付。108 份本地历史源码及既有构建检查保全，不整体进入实现 PR。当前交付 guest bootstrap，后续能力仍待选择。运行版本以稳定交付为准，不拼接修复中的文件。
+结构说明随实现保持更新，运行实现按独立业务结果交付。108 份本地历史源码及既有构建检查保全，不整体进入实现 PR。当前交付 watchdog，后续能力仍待选择。运行版本以稳定交付为准，不拼接修复中的文件。
