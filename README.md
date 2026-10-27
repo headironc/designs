@@ -6,6 +6,7 @@
 
 - [CI、审查、准入与运行体系](ci-architecture.md)：跨库架构的唯一正文。当前先完成架构及两库采纳合同；已选的首个实现片是可信 CI 执行与报告，agents 与 Nucleus 的产品 WIP 保全。runner 已批准的独立凭据入口继续准备，各片独立验收。
 - [Rust 与 Halo 共用 runner](ci-architecture.md#runner-与-kiln)：共用基础设施、两层镜像、不可信池边界、生命周期、缓存和接入验收；文档收录不表示已部署。
+- [Runner 的 Go 结构与实施切片](runner/architecture.md)：自有代码职责、兼容要求与小 PR 顺序；当前为结构方案，运行实现尚未交付。
 
 ## 设计与实施
 
