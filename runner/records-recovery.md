@@ -1,0 +1,106 @@
+# Records-only 恢复协议
+
+本设计约束 Go 版 records-only 恢复，运行能力尚未实现。当前 [正常启动](startup.md)、[watchdog](guard-watchdog.md) 和 [provider 读取](read.md)仍拒绝维护标记。创建与删除也保持原拒绝规则。本文不授予部署、服务启停、清记录或历史记录迁移权限。
+
+records-only 处理一种明确故障：原执行已终结，实际执行资源已闭合；GARM 仍保留准确实例记录，guard 的阻断状态禁止正常启动。恢复窗口让 GARM 通过自身 API 和原 worker 处理该记录。进入前只允许原 GARM 记录及 guard 阻断材料残留，不宣称整体生命周期已经闭合。窗口不执行 VM 工作，不把原失败改写成成功，也不以清空数据库代替资源回收。
+
+## 事实所有者与输入
+
+[跨库生命周期](../ci-architecture.md#生命周期与恢复)拥有完整闭合要求。本能力消费原执行的可信绑定和原操作回执，并重新读取外部事实。不能从当前空列表倒推未曾记录的身份。
+
+| 所有者 | 本能力消费的事实 | 不可替代的判断 |
+| --- | --- | --- |
+| 原执行生命周期 | run、attempt、job、runner、GARM instance、VM UUID、host boot、QEMU PID/starttime、cgroup、存储和原操作身份 | 正确 job 的终态、runner 注销、原进程结束、全部资源及临时凭据闭合 |
+| GARM | controller、repository、ScaleSet、实例及其关联；API 与 SQLite 中的原记录 | controller UUID 与 GARM instance UUID 不等于 VM UUID；数据库缺行不等于原请求未发送 |
+| provider guard | 准确 policy、active/intent/latch、永久锁和本地事务原件 | 原占用和未知操作保持；维护程序不得从名称猜测关联或自行生成替代 active |
+| systemd | 原 boot、unit、job 路径和 ID、InvocationID、JobRemoved 及进程状态 | job 成功和 unit/进程终态分别核验；当前 inactive 不能代替原 job 成功回执 |
+| 部署维护 | 已安装二进制、配置及 unit 的摘要，受保护恢复程序和操作记录 | 只解释已绑定版本的新操作；旧 Python 操作继续由原恢复程序处理 |
+
+ScaleSet 使用 GARM 的内部数值 ID，另核 repository UUID 和名称。GitHub ScaleSet ID 不代替该内部 ID。provider pool 使用[准确派生身份](architecture.md#scaleset-的-provider-池身份)。GARM 实例 ID、实例名、agent ID 和 ScaleSet 外键必须同时匹配；名称相同不建立身份连续性。
+
+## 进入维护前的闭合条件
+
+原生命周期先证明准确 job 已终结、runner 已注销。原 VM、QEMU、cgroup、可写卷、快照及执行临时凭据也已闭合。原创建、删除和注册操作仍有未知结果时，保留占用并拒绝维护。换目录、重启或等待超时都不产生重发资格。维护自身使用的管理会话仍归原凭据操作管理，不得把执行凭据闭合误解为提前撤销维护所需的受控会话。
+
+进入许可签发前，全部有效 ScaleSet 和普通 pool 均已停接。watchdog timer、worker 和 controller 已停下，原 systemd job 已核终态，相关 cgroup 和 provider 子进程已结束。进程判断绑定原身份；只扫描程序名不足以证明结束。原 guard 的 active 或 intent 绑定同一实例，阻断 latch 和原字节完整保留。`state.pending` 或 `state.new` 存在时，先由原状态事务的恢复责任解释，不能纳入维护许可后顺手删除。
+
+维护入口消费已经完成的停服结果。停接、停止服务和注销的发送与恢复仍属于原操作 owner；本入口不偷偷补发这些动作。实际资源核验失败、身份缺失、凭据闭合不明或出现另一条实例记录时，输出具体拒绝阶段，保持原文件。
+
+## 服务身份下的数据库快照
+
+`modernc.org/sqlite` 经 `database/sql` 由实际恢复消费者调用。固定 GARM v0.2.1 的表和列语义，按其模型核对后编写查询；不同 schema 或字段类型拒绝，不增加另一套兼容查询。读取仅包含恢复所需身份和状态，不输出凭据表或任意 SQL 结果。
+
+数据库读取进程使用 `nucleiron` 的实际 UID、主 GID 和受控附加组。root 编排进程通过受控子进程切换身份，不在多线程 Go 进程中临时切换 EUID。数据库、WAL 和 SHM 必须归该服务身份所有，拒绝符号链接、硬链接和非普通文件；父路径与已打开文件身份一起核验。发现原件所有权异常时交回原操作恢复，不自动 chown。
+
+连接使用只读模式并启用 `query_only`。同一事务读取停接状态、准确 ScaleSet 及实例记录，包含 WAL 中已提交的数据；禁止 `immutable`、复制裸 DB 或忽略 WAL。只读连接仍可能维护共享内存，故数据库侧文件只能由服务身份打开。读完核对路径和文件身份；超时、锁冲突、文件替换或查询失败均不产生成功快照。
+
+查询同时验证全部有效 ScaleSet/pool 未启用、目标 ScaleSet 未删除且仍绑定同一 repository/name。实例查询保留原恢复合同的严格边界：整个专用数据库只有目标实例；完成清理后才允许完全无实例。额外实例、软删除残留、NULL、错误类型及越界标识符都拒绝。正整数 ID 使用精确整数，禁止经浮点数转换。
+
+数据库快照只说明该事务观察到的事实。启动前和每个维护动作前重新读取受影响条件；没有跨 GitHub、GARM、LXD 和 systemd 的全局原子快照。停接、原进程终结和唯一受管写者是窗口成立的部署前提，测试不能替代这些前提的现场验证。
+
+## 一个窗口的写入与恢复
+
+root 维护入口拥有窗口，guard 拥有启动准入和 provider 拒绝规则。两者消费同一份受保护许可及原操作记录，不各自推导另一套维护状态。正常调用继续使用现有永久 guard 锁；维护动作还绑定原窗口的独占锁。先写意图并同步，再发送一次外部请求。重入先读取原意图、原回执和当前事实，不以新的 operation 名重新执行。
+
+| 动作 | 写前条件与动作 | 成功证据及中断后的责任 |
+| --- | --- | --- |
+| 签发许可 | 满足上述闭合条件，固定原 guard 字节摘要、运行文件摘要和执行绑定；独占创建维护目录与许可 | 文件和父目录持久化后读回；部分目录或缺损文件继续阻断，沿原签发记录处理，不签第二份许可 |
+| 维护启动 | 核许可仍有效，持久化 StartUnit 意图；订阅 JobRemoved 后仅发送一次 | 保存原 job 回执及新 invocation，发布该 job 的启动授权；丢回执时沿原事件和记录恢复，不能从当前 active 补造授权 |
+| 清理 GARM 记录 | 原维护 invocation 存活，所有准入仍关闭，准确实例与原资源闭合条件仍成立；先恢复已有清理进度，确需新请求时记录目标和 `forceRemove` 意图后仅调用一次 GARM API | API 与同一数据库的原记录均消失；HTTP 错误或超时不重发，继续核原请求；数据库缺行但 API 仍有记录时保持未闭合 |
+| 停止维护 | 核该窗口的准确 invocation 和原记录已清理，写前记录后请求停止 | 原停止 job 成功、原进程和 cgroup 结束；原开始请求未结清时，先恢复该请求，不能随意停止另一个 invocation |
+| 恢复 guard 与退役许可 | 原维护停止已确认、所有闭合条件仍成立、guard 原摘要一致 | 通过 guard 自有持久化事务恢复空占用，保留恢复原件；随后归档并原子退役同一许可，目录同步和读回后才结束窗口 |
+
+Go 许可只面向新 Go 操作，带显式格式版本。许可绑定原操作、boot、controller/repository/ScaleSet、实例/agent/VM、原 guard 字节及安装成品摘要。摘要消费准确原字节，不把 Python JSON 重新编码为 Go JSON 后声称同一份历史许可。完整字段和编码随首次实现及固定测试向量交付，不先建立可接收任意恢复请求的通用 schema。
+
+沿用当前来源中的同 boot、300 秒单调时间启动有效期。该期限只限制许可签发到启动准入，不作为 job 执行期限，也不因重复读取而延长。已开始窗口超过期限后仍保留原停止与关闭责任，不能因许可过期遗弃正在运行的维护 controller。boot 变化使旧许可失去启动资格；保留持久化原件及未知操作，交原恢复路径核明，不重新签发。
+
+所有持久化失败保留当次材料。guard 恢复中断时沿准确 before/after 和原事务文件判定，不能另写空状态覆盖。退役中断时核原目录和归档目标的身份、内容及意图，不用新路径跳过未知 rename。保留一处可解释的原操作记录，既不同时存在两份可用许可，也不通过删除残留制造成功。
+
+### GARM 后台处理也是窗口的一部分
+
+GARM v0.2.1 的 `DeleteRunner` 先处理 GitHub runner，再把实例改为 `pending_force_delete`。provider worker 随后尝试删除；force 模式允许它忽略 provider 错误，推进为 deleted。ScaleSet worker 再收尾数据库记录。因此 HTTP 成功只证明请求被处理，不证明记录已消失。调用链分别见 [Runner.DeleteRunner](https://github.com/cloudbase/garm/blob/v0.2.1/runner/runner.go)、[instance manager](https://github.com/cloudbase/garm/blob/v0.2.1/workers/provider/instance_manager.go) 和 [ScaleSet worker](https://github.com/cloudbase/garm/blob/v0.2.1/workers/scaleset/scaleset.go)。
+
+启动 controller 也可能推进原 error、pending_delete 或 pending_force_delete 状态。启动许可因此覆盖目标记录的内建协调，不把 StartUnit 当成没有业务写入的动作。启动前固定原数据库状态，许可只接受准确目标。provider 写入继续拒绝，实际 VM 已不存在的依据仍来自独立资源核验。
+
+清理入口先查原意图和准确记录。记录已经消失时只核闭合。已有清理意图，或原状态已为 `pending_force_delete`、`deleting`、`deleted` 时，沿原动作观察，不再发 DELETE。其他合格状态的 force 请求属于本窗口的明确动作，不能覆盖结果未知的旧请求。GARM 自身的后台协调归 GARM 管理。本程序只保证不重复提交自己拥有的请求，不宣称改变第三方内部重试机制或实现端到端 exactly-once。
+
+## 启动竞态与 provider 协议
+
+systemd 可能在 StartUnit 返回前启动 ExecStartPre。root 编排器不持有 guard 锁等待 StartUnit，避免启动前检查死锁。guard 只在有界时间内等待该次 root 授权，随后共同核对许可摘要、原意图、同 boot 的 job ID/path、新 InvocationID 和 `INVOCATION_ID`。超时仅结束等待；保留原请求，不能重复启动。等待期间持续检查窗口、原字节和期限。
+
+root 授权只绑定仍在 activating 的准确 job。guard 准入还核运行成品、原 guard 字节、停接数据库快照和资源闭合事实。先前 invocation、其他 job、未加载 unit 变更、缺失原开始回执或伪造授权均拒绝。服务已 active 但无法证明原启动关系时，保持未知，不能因可用而接纳。
+
+维护标记存在时，全部 provider 写命令始终拒绝，包括没有有效许可和许可已过期的情形。正常模式的三个读取入口不直接放宽。维护读取随同一启动消费者交付：版本查询仍绑定 native 成品。实例查询区分已确认物理资源消失与 GARM 的遗留记录，不伪造运行中的 VM。
+
+ScaleSet 轮询看到 provider 空列表后，可能请求 GitHub 注销并推进数据库状态。实现片须验证维护读取与这些后台动作的组合，不能把空列表当成纯展示数据。准确空值、缺失响应和调用顺序由真实 provider 协议测试固定。测试证明维护 controller 能完成目标动作，且所有 VM 写请求都被 guard 拒绝；未完成组合核验，不交付维护启动入口。
+
+退役许可不自动恢复接单。正常 controller、网关和 watchdog 的恢复是独立业务结果。恢复仍使用写前记录、原 job 和新 invocation 核验，ScaleSet 保持 disabled。启用接单属于另行授权的运行切换。`recovered_only` 只说明恢复完成，不能覆盖原 job 的失败结论或证明完整真实验收通过。
+
+## 实施边界与验收
+
+先交付新 Go 操作的分配记录生成入口，再交付消费该记录的闭合诊断。当前 Go guard 的 active 只保存实例名、VM UUID、时间和 ready/agent 信息，没有完整的 run/job、GARM 实例 ID、QEMU 和存储绑定。不能把 active 转成一份看似完整的执行记录，也不通过读取旧 Python allocation 格式填补新操作的来源。
+
+`runner-admin` 的分配采集入口消费可信执行请求，并从 GitHub/GARM/LXD/宿主核对实际分配。在原 QEMU 存活时绑定 boot、PID/starttime、VM UUID、cgroup 和实际可写存储；采集前后再次核验对象身份。请求预期与真实分配分别保存，只有平台事实匹配才建立 job/runner 关联，guest 自报字段不能替代。已有资源不匹配或缺少原身份时保持未确认，不能记录成功再让诊断补证。入口独占持久化新 Go 操作的原件，包含完整来源与固定格式；部分写入保留材料，同一操作不能覆盖或重新绑定到替换 VM。
+
+首个记录消费者是 `runner-admin` 的原执行闭合诊断。它读取准确 GitHub/GARM/LXD/宿主和服务事实，输出缺口及可定位的脱敏证据。数据库读取随该消费者接入；没有原身份的历史材料明确报告缺口。诊断不签许可、不清记录、不释放容量，观察结果不直接充当下一次写操作的许可。分配采集也不创建 VM、不注册 runner、不派发 job；真实操作仍由已绑定的执行流程负责。
+
+之后交付一个完整的新 Go 维护窗口：许可签发、启动准入、必要维护读取、准确 GARM 记录清理、停止、guard 事务恢复和许可退役一起验收。不能只交启动校验器，留下无法退出的窗口。原执行闭合与服务事实复用前片责任，但每次写入前重新核验。窗口以停止且仍停接的状态结束；正常服务恢复另片交付。当前历史未知操作不作为新 Go 窗口的试运行对象。
+
+| 验收面 | 必须证明的行为 |
+| --- | --- |
+| 原记录生成 | 平台分配与可信请求匹配；采集期间 VM/PID/cgroup/存储身份变化拒绝；QEMU 已退出或身份缺失不能补造；并发、部分持久化和重入不覆盖原件 |
+| 原身份与资源 | 错 job/attempt、同名替换 VM、PID 复用、boot 变化、残留 cgroup/卷/快照/凭据、迟到 operation 都阻止清理与释放 |
+| 数据库读取 | WAL-only 新提交可见；读事务一致；实际 UID/GID 正确；无 SQL 写入；异常所有权、链接、NULL、错误类型、附加实例及 schema 漂移拒绝 |
+| 许可与文件 | 部分签发、重复请求、字节变化、错误 owner/mode、链接替换、过期和旧格式均拒绝；原件保持 |
+| 原 systemd 请求 | 事件早于回执、丢回执、ExecStartPre 等待授权、另一个 job/invocation、重启和失败终态均保留原请求且不重发 |
+| 维护协议 | 真实 GARM 调用顺序可完成 records-only 目标；所有 provider 写入拒绝；读取不会补造 VM 或导致清理其他记录 |
+| GARM 清理 | 写前记录、准确实例和 API 参数；超时、错误、丢回执及 API/DB 不一致不重发；成功核原记录两端消失 |
+| 退出窗口 | 停止请求未知、guard 持久化中断、许可退役中断均可沿原材料判断；未闭合持续停接；不自动启动下一台 VM |
+
+离线测试使用合成 SQLite/WAL、实际 SDK 的私有服务替身和私有 D-Bus。真实资源闭合、凭据收尾、服务身份与恢复窗口另需获授权的宿主验收。源码测试和文档审查不证明这些现场条件已满足。
+
+## 行为来源与未闭合依赖
+
+来源是保全包 `halo-20261026/` 中 `vm-restore-guard-pin-20261026/manage-records-only.py` 的 `Window` 调用链，以及 `vm-session-receipt-recovery-20261027/records_only.py` 的数据库读取和启动资格规则。前者分别拥有 issue/start/cleanup/stop/restore/retire；后者没有独立签发维护资格。本文保留职责和故障约束，不承诺复制两份文件即可形成可部署版本。
+
+当前 Go 源码尚缺完整原执行记录生成、跨平台闭合观察、上述维护窗口和正常服务恢复。原记录生成的行为来源另见同一保全包 `vm-restore-guard-pin-20261026/lifecycle.py` 的 `init`、`allocated` 和 `capture_start`；这些旧入口不是新 Go 程序的兼容消费者。历史版本与真实新 repository 绑定由原运行 owner 确认；现有残留操作继续沿其原程序恢复。实现片绑定具体来源、Go 成品和依赖版本，再提交匹配检查。本文既不选择现场许可，也不改变现有 Go 拒绝行为。
