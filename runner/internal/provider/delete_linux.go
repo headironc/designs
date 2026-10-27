@@ -51,7 +51,7 @@ func (s startup) delete(ctx context.Context, env map[string]string, d deleter) (
 	phase := "admission"
 	stage, err := s.withState(func(g *guardFiles) error {
 		var p deletePolicy
-		if decodeObject(g.policy, &p, true) != nil || !uuid.MatchString(p.Controller) || !uuid.MatchString(p.Pool) || !digest.MatchString(p.Image) {
+		if decodeObject(g.policy, &p, true) != nil || !p.valid() {
 			return errRefused
 		}
 		// GARM v0.1.0 deletion supplies no pool or stdin. A supplied pool must
@@ -137,7 +137,7 @@ func beforeDelete(ctx context.Context, p guardPolicy, active activeInstance) (*i
 }
 
 func deletionTarget(client lxd.InstanceServer, p guardPolicy, active activeInstance) (*int64, error) {
-	id, err := createdInstance(client, createPolicy{Controller: p.Controller, Pool: p.Pool, Image: p.Image}, active.Name)
+	id, err := createdInstance(client, p, active.Name)
 	if err != nil || id != active.UUID {
 		return nil, errRefused
 	}
