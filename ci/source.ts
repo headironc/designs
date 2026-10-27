@@ -119,6 +119,8 @@ export function listSourcePaths(root: string): string[] {
     [
       "-c",
       `safe.directory=${realpathSync(root)}`,
+      "-c",
+      "core.fsmonitor=false",
       "ls-files",
       "-z",
       "--cached",

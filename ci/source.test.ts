@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
@@ -20,7 +21,11 @@ import {
   readSourceIdentity,
   SourceIdentitySchema,
 } from "./source.ts";
-const fixtureEnvironment = () => ({ PATH: process.env.PATH, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" });
+const fixtureEnvironment = () => ({
+  PATH: process.env.PATH,
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
+});
 
 function fixture(t: TestContext): string {
   const directory = mkdtempSync(path.join(os.tmpdir(), "agents-source-"));
@@ -114,6 +119,31 @@ test("Git discovery includes new source and excludes deleted and ignored inputs"
       .entries.length,
     3,
   );
+});
+
+test("Git discovery never executes a repository-local fsmonitor hook", (t) => {
+  const directory = fixture(t);
+  const git = (...args: string[]) =>
+    execFileSync("git", args, {
+      cwd: directory,
+      env: fixtureEnvironment(),
+    });
+  writeFileSync(path.join(directory, "source.txt"), "source\n");
+  git("add", "source.txt");
+  const marker = path.join(directory, ".git/fsmonitor-invoked");
+  writeFileSync(
+    path.join(directory, ".git/fsmonitor-hook"),
+    "#!/bin/sh\nprintf invoked > .git/fsmonitor-invoked\nprintf 'token\\000'\n",
+    { mode: 0o755 },
+  );
+  git("config", "--local", "core.fsmonitor", ".git/fsmonitor-hook");
+  // Prove the fixture actually executes without the trusted invocation override.
+  git("ls-files", "--cached");
+  assert.equal(existsSync(marker), true);
+  rmSync(marker);
+  assert.deepEqual(listSourcePaths(directory), ["source.txt"]);
+  assert.equal(readSourceIdentity(directory, ["source.txt"]).entries.length, 1);
+  assert.equal(existsSync(marker), false);
 });
 
 test("Git discovery rejects undecodable path bytes instead of dropping tracked source", (t) => {

@@ -1,16 +1,10 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { createServer, request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { createServer as createTcpServer } from "node:net";
 import { once } from "node:events";
 import { createHash } from "node:crypto";
-import {
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -26,6 +20,7 @@ import {
 } from "./upload.ts";
 import type { Archive } from "./upload.ts";
 import { reportRequest } from "./http.ts";
+import { reportBytes } from "./artifact.ts";
 
 const identity = {
   workflowRunBackendId: "run",
@@ -240,11 +235,7 @@ test("archive is a complete single-report ZIP before any write", async (t) => {
     result.sha256,
     createHash("sha256").update(readFileSync(result.file)).digest("hex"),
   );
-  const decoded = execFileSync("python3", [
-    "-c",
-    "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1]); assert z.namelist()==['report.json']; sys.stdout.buffer.write(z.read('report.json'))",
-    result.file,
-  ]);
+  const decoded = await reportBytes(readFileSync(result.file), signal());
   assert.deepEqual(decoded, bytes);
 });
 
