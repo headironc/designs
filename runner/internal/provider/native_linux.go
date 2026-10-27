@@ -52,12 +52,16 @@ func pinnedProgram(path string, uid, mode uint32, expected string) (*os.File, er
 }
 
 func invokeCreate(ctx context.Context, g *guardFiles, p createPolicy, input []byte) ([]byte, error) {
-	native, err := pinnedProgram(g.s.native, g.s.rootUID, 0755, p.ProviderSHA)
+	return invokeNative(ctx, g, p.ProviderSHA, p.ConfigSHA, []string{"GARM_COMMAND=CreateInstance", "GARM_CONTROLLER_ID=" + p.Controller, "GARM_POOL_ID=" + p.Pool}, input)
+}
+
+func invokeNative(ctx context.Context, g *guardFiles, providerSHA, configSHA string, environment []string, input []byte) ([]byte, error) {
+	native, err := pinnedProgram(g.s.native, g.s.rootUID, 0755, providerSHA)
 	if err != nil {
 		return nil, err
 	}
 	defer native.Close()
-	config, err := pinnedProgram(g.s.config, g.s.rootUID, 0644, p.ConfigSHA)
+	config, err := pinnedProgram(g.s.config, g.s.rootUID, 0644, configSHA)
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +75,7 @@ func invokeCreate(ctx context.Context, g *guardFiles, p createPolicy, input []by
 	// The inherited lock keeps a killed guard's still-running native process
 	// serialized. The intent independently prevents a new invocation after exit.
 	cmd.ExtraFiles = []*os.File{native, config, g.lock}
-	cmd.Env = []string{"GARM_COMMAND=CreateInstance", "GARM_INTERFACE_VERSION=v0.1.0", "GARM_CONTROLLER_ID=" + p.Controller, "GARM_POOL_ID=" + p.Pool, "GARM_PROVIDER_CONFIG_FILE=/proc/self/fd/4"}
+	cmd.Env = append(environment, "GARM_INTERFACE_VERSION=v0.1.0", "GARM_PROVIDER_CONFIG_FILE=/proc/self/fd/4")
 	cmd.Stdin = bytes.NewReader(input)
 	var output boundedOutput
 	cmd.Stdout, cmd.Stderr = &output, io.Discard

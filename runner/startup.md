@@ -4,7 +4,7 @@
 
 ## 启动条件
 
-正常启动入口为 `--check-startup`。同一二进制另有独立的 [watchdog 检查](guard-watchdog.md)和无参数的[单次 VM 创建入口](create.md)。真实和有效 UID 必须匹配本机 `nucleiron` 用户，有效 GID 匹配其主组；root 调用也拒绝。正常启动不执行 native provider，不访问 GARM、GitHub、LXD 或 systemd API。
+正常启动入口为 `--check-startup`。同一二进制另有独立的 [watchdog 检查](guard-watchdog.md)，以及无参数的 [VM 创建](create.md)和[删除](delete.md)入口。真实和有效 UID 必须匹配本机 `nucleiron` 用户，有效 GID 匹配其主组；root 调用也拒绝。正常启动不执行 native provider，不访问 GARM、GitHub、LXD 或 systemd API。
 
 | 输入 | 校验与含义 |
 | --- | --- |
@@ -30,7 +30,7 @@ JSON 对象拒绝重复键和大小写别名，防止有值的意图被后一个
 
 [30-provider-guard.conf](templates/30-provider-guard.conf) 保留原挂载依赖和 `lxd` 附加组。切换时作为 `nucleiron.service.d/30-provider-guard.conf` 的完整替换文件消费，将该文件中的 `ExecStartPre` 指向新 Go 入口。核对其他 drop-in，避免遗留启动校验重复执行；不清空其他能力拥有的启动条件。
 
-正常启动切片不修改 GARM external provider 的执行路径。二进制现已增加单次创建能力，完整运行切换仍等待其余 provider 命令及部署验收，不覆盖旧 `guarded-lxd-provider`。不恢复已停止的 Python 流程，也不建立 Python fallback。
+正常启动切片不修改 GARM external provider 的执行路径。二进制现已增加单次创建与删除能力，完整运行切换仍等待其余 provider 命令及部署验收，不覆盖旧 `guarded-lxd-provider`。不恢复已停止的 Python 流程，也不建立 Python fallback。
 
 部署能力准备已有身份绑定的 policy、native 配置、guard 状态与永久锁。缺文件时启动检查失败，不自动初始化或修复状态。已有意图、latch、维护许可和未知操作保持原字节及恢复责任。旧操作由固定原恢复程序解释，不通过迁移记录或删除标记放行。
 

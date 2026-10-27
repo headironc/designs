@@ -130,12 +130,31 @@ func TestCreateCrashHelper(t *testing.T) {
 	}
 	env := map[string]string{"GARM_COMMAND": "CreateInstance", "GARM_CONTROLLER_ID": p.Controller, "GARM_POOL_ID": p.Pool, "GARM_PROVIDER_CONFIG_FILE": s.config, "GARM_INTERFACE_VERSION": "v0.1.0"}
 	c := creator{capacity: func(context.Context) error { return nil }, before: func(context.Context, createPolicy) error { return nil }, after: func(context.Context, createPolicy, string) (string, error) { return "", errRefused }, invoke: invokeCreate, now: time.Now}
+	if os.Getenv("GUARD_WRITE_COMMAND") == "DeleteInstance" {
+		env["GARM_COMMAND"], env["GARM_INSTANCE_ID"] = "DeleteInstance", "runner-one"
+		d := deleter{before: func(context.Context, guardPolicy, activeInstance) (*int64, error) { id := int64(42); return &id, nil }, after: func(context.Context) error { return errRefused }, invoke: invokeDelete, now: time.Now}
+		_, err = s.delete(context.Background(), env, d)
+		t.Fatalf("delete worker unexpectedly returned: %v", err)
+	}
 	_, _, err = s.create(context.Background(), env, bytes.NewReader(input), c)
 	t.Fatalf("worker unexpectedly returned: %v", err)
 }
 
 func TestCreateSurvivesGuardDeathWithoutReplay(t *testing.T) {
+	testWriteSurvivesGuardDeath(t, "CreateInstance")
+}
+
+func TestDeleteSurvivesGuardDeathWithoutReplay(t *testing.T) {
+	testWriteSurvivesGuardDeath(t, "DeleteInstance")
+}
+
+func testWriteSurvivesGuardDeath(t *testing.T, command string) {
+	t.Helper()
 	s, p, env, input, c := createFixture(t)
+	var d deleter
+	if command == "DeleteInstance" {
+		s, env, d = deleteFixture(t)
+	}
 	base := filepath.Dir(s.native)
 	fifo := filepath.Join(base, "entered")
 	if err := unix.Mkfifo(fifo, 0600); err != nil {
@@ -159,7 +178,7 @@ func TestCreateSurvivesGuardDeathWithoutReplay(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	worker := exec.CommandContext(ctx, exe, "-test.run=^TestCreateCrashHelper$")
-	worker.Env = append(os.Environ(), "GUARD_CREATE_HELPER="+base)
+	worker.Env = append(os.Environ(), "GUARD_CREATE_HELPER="+base, "GUARD_WRITE_COMMAND="+command)
 	var diagnostic bytes.Buffer
 	worker.Stderr = &diagnostic
 	if err := worker.Start(); err != nil {
@@ -205,6 +224,19 @@ func TestCreateSurvivesGuardDeathWithoutReplay(t *testing.T) {
 	json.Unmarshal(raw, &state)
 	if isNull(state.Intent) || !bytes.Contains(state.Intent, []byte("runner-one")) {
 		t.Fatal("original intent lost")
+	}
+	if command == "DeleteInstance" {
+		if isNull(state.Active) {
+			t.Fatal("killed delete released capacity")
+		}
+		d.invoke = func(context.Context, *guardFiles, deletePolicy, string) ([]byte, error) {
+			t.Fatal("killed delete replayed")
+			return nil, nil
+		}
+		if _, err := s.delete(context.Background(), env, d); err == nil {
+			t.Fatal("unknown delete admitted")
+		}
+		return
 	}
 	c.invoke = func(context.Context, *guardFiles, createPolicy, []byte) ([]byte, error) {
 		t.Fatal("killed operation replayed")
@@ -334,9 +366,23 @@ func TestCreateFailureKeepsIntent(t *testing.T) {
 }
 
 func TestCreateNativeUsesPinnedInputsAndWaits(t *testing.T) {
+	testNativeUsesPinnedInputsAndWaits(t, "CreateInstance")
+}
+
+func TestDeleteNativeUsesPinnedInputsAndWaits(t *testing.T) {
+	testNativeUsesPinnedInputsAndWaits(t, "DeleteInstance")
+}
+
+func testNativeUsesPinnedInputsAndWaits(t *testing.T, command string) {
+	t.Helper()
 	for _, mode := range []string{"success", "exit", "cancel", "overflow"} {
 		t.Run(mode, func(t *testing.T) {
 			s, p, env, input, c := createFixture(t)
+			var d deleter
+			if command == "DeleteInstance" {
+				s, env, d = deleteFixture(t)
+				d.invoke = invokeDelete
+			}
 			fifo := filepath.Join(filepath.Dir(s.native), "entered")
 			if err := unix.Mkfifo(fifo, 0600); err != nil {
 				t.Fatal(err)
@@ -346,12 +392,19 @@ func TestCreateNativeUsesPinnedInputsAndWaits(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer pipe.Close()
-			script := "#!/bin/sh\n[ \"$GARM_COMMAND\" = CreateInstance ] || exit 2\n[ \"$GARM_PROVIDER_CONFIG_FILE\" = /proc/self/fd/4 ] || exit 3\n"
+			script := fmt.Sprintf("#!/bin/sh\n[ \"$GARM_COMMAND\" = %s ] || exit 2\n[ \"$GARM_PROVIDER_CONFIG_FILE\" = /proc/self/fd/4 ] || exit 3\n", command)
 			script += "IFS= read -r config < \"$GARM_PROVIDER_CONFIG_FILE\"\n[ \"$config\" = \"secret = 'never-log-this'\" ] || exit 4\n/bin/cat > /dev/null\n"
+			if command == "DeleteInstance" {
+				script += "[ \"$GARM_INSTANCE_ID\" = runner-one ] || exit 5\n[ -z \"$GARM_POOL_ID\" ] || exit 6\n"
+			}
 			script += fmt.Sprintf("printf ready > '%s'\n", fifo)
 			switch mode {
 			case "success":
-				script += "printf '{\"name\":\"runner-one\",\"provider_id\":\"runner-one\",\"status\":\"running\",\"os_type\":\"linux\",\"os_arch\":\"amd64\"}'\n"
+				if command == "DeleteInstance" {
+					script += "printf '\\n'\n"
+				} else {
+					script += "printf '{\"name\":\"runner-one\",\"provider_id\":\"runner-one\",\"status\":\"running\",\"os_type\":\"linux\",\"os_arch\":\"amd64\"}'\n"
+				}
 			case "exit":
 				script += "printf secret >&2\nexit 9\n"
 			case "cancel":
@@ -373,6 +426,11 @@ func TestCreateNativeUsesPinnedInputsAndWaits(t *testing.T) {
 			finished := make(chan struct{})
 			go func() {
 				defer close(finished)
+				if command == "DeleteInstance" {
+					_, err := s.delete(ctx, env, d)
+					done <- result{nil, err}
+					return
+				}
 				_, out, err := s.create(ctx, env, bytes.NewReader(input), c)
 				done <- result{out, err}
 			}()
@@ -392,7 +450,7 @@ func TestCreateNativeUsesPinnedInputsAndWaits(t *testing.T) {
 			}
 			got := <-done
 			out, err := got.out, got.err
-			if mode == "success" && !bytes.Contains(out, []byte("runner-one")) {
+			if command == "CreateInstance" && mode == "success" && !bytes.Contains(out, []byte("runner-one")) {
 				t.Fatal("native output lost")
 			}
 			if (err == nil) != (mode == "success") {
@@ -410,6 +468,19 @@ func TestCreateNativeUsesPinnedInputsAndWaits(t *testing.T) {
 			}
 			if mode == "cancel" && (!errors.As(err, &exit) || ctx.Err() != context.Canceled) {
 				t.Fatalf("running native not cancelled: %v", err)
+			}
+			if command == "DeleteInstance" {
+				raw, err := os.ReadFile(filepath.Join(s.state, "state.json"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var state guardState
+				if err := json.Unmarshal(raw, &state); err != nil {
+					t.Fatal(err)
+				}
+				if isNull(state.Active) != (mode == "success") || isNull(state.Intent) != (mode == "success") {
+					t.Fatal("native result lost capacity state")
+				}
 			}
 		})
 	}

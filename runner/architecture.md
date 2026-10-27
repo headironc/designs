@@ -1,6 +1,6 @@
 # Runner 的 Go 结构与实施切片
 
-本设计将 runner 自有实现改为 Go，并按独立业务结果交付。[专用防火墙重载](README.md)、[guest bootstrap](bootstrap.md)、[provider 异常停接](watchdog.md)、[Go guard 正常启动准入](startup.md) 和 [guard watchdog 检查与状态持久化](guard-watchdog.md) 已合入。异常停接已接入 GARM client 与 go-systemd，包含原停止 job 恢复。本片交付[单次 VM 创建准入与执行](create.md)，删除及容量释放另片交付。本文已采用下述 Go 包，依赖随对应消费者接入。现有 Python 快照用于行为对照和原操作恢复。GARM、LXD provider、nginx、rsyslog、Squid 和 dnsproxy 保持各自职责，不重写第三方组件。
+本设计将 runner 自有实现改为 Go，并按独立业务结果交付。[专用防火墙重载](README.md)、[guest bootstrap](bootstrap.md)、[provider 异常停接](watchdog.md)、[Go guard 正常启动准入](startup.md)、[guard watchdog 检查与状态持久化](guard-watchdog.md) 和[单次 VM 创建](create.md)已合入。异常停接已接入 GARM client 与 go-systemd，包含原停止 job 恢复。本片交付 [VM 删除与容量释放](delete.md)。本文已采用下述 Go 包，依赖随对应消费者接入。现有 Python 快照用于行为对照和原操作恢复。GARM、LXD provider、nginx、rsyslog、Squid 和 dnsproxy 保持各自职责，不重写第三方组件。
 
 跨仓库边界由 [CI 架构](../ci-architecture.md#runner-与-kiln) 维护。designs 拥有 runner 自有程序及发布成品。Kiln 拥有任务镜像，消费仓库拥有工作流和业务检查。新代码在独立工作树准备，原接入现场和未知操作保全。
 
@@ -61,7 +61,7 @@ GARM 仍负责 controller 与其数据库。自有代码通过已采用 API 和�
 
 ## 已采用的 Go 包
 
-以下选型覆盖整个 runner，均为已接受的目标依赖。正常启动已接入 `x/sys`，guard watchdog 已接入 LXD client 和 go-systemd 的只读单元查询。异常停接已接入 GARM client 与 go-systemd，包含原停止 job 恢复。本片将 provider-common 与 LXD client 用于单次 VM 创建准入和结果核验；其余包随首个真实消费者进入独立实施片。已有实现也按表中目标迁移，不建立双版本兼容路径。
+以下选型覆盖整个 runner，均为已接受的目标依赖。正常启动已接入 `x/sys`，guard watchdog 已接入 LXD client 和 go-systemd 的只读单元查询。异常停接已接入 GARM client 与 go-systemd，包含原停止 job 恢复。单次创建已采用 provider-common 与 LXD client；本片复用 LXD client 完成删除目标及容量释放核验。其余包随首个真实消费者进入独立实施片。已有实现也按表中目标迁移，不建立双版本兼容路径。
 
 | 包与上游 | 承担的能力与消费者 | 自有代码保留的责任 |
 | --- | --- | --- |
@@ -118,8 +118,8 @@ SDK 接入保留现有超时、代理、重定向、响应上限和精确整数�
 | provider 异常停接（已合入） | Go watchdog 消费 guard 检查接口，异常时停止准确目标的接入 | 身份核验、禁用及读回、未知请求记录、失败停止请求；不迁移 guard 或 records-only，不启用服务 |
 | Go guard 正常启动准入（已合入） | controller 正常启动前核准配置、程序摘要与 guard 状态 | 标准库与 x/sys 文件保护、并发锁、intent/latch 拒绝；active 保留容量，所有维护模式启动拒绝；不含 VM 写操作和 records-only |
 | Go guard watchdog（已合入） | 现有 Go watchdog 消费完整健康观察及持久化结果 | LXD client、systemd 状态查询、挂载与储备、ready/latch 转换、原子写入和中断拒绝；不清除旧操作，不含 VM 写操作和部署 |
-| Go guard 单次 VM 创建（本片） | 准入后只调用一次 native 创建，准确核验后保存 active | provider-common 协议、LXD client 核验、写前意图、原进程结束及未知拒重发；不含删除、释放容量或部署 |
-| Go guard VM 删除与容量释放 | 删除准确绑定实例，原执行完整闭合后才释放容量 | 原执行、LXD operation、实例与卷终态；不以 VM/卷消失代替原操作结束 |
+| Go guard 单次 VM 创建（已合入） | 准入后只调用一次 native 创建，准确核验后保存 active | provider-common 协议、LXD client 核验、写前意图、原进程结束及未知拒重发；不含删除、释放容量或部署 |
+| Go guard VM 删除与容量释放（本片） | 删除准确绑定实例，原 native 结束和 LXD 核验后才释放 provider 容量 | bootstrap 完成、写前记录、实例/可写卷及 operation 核验；未知拒重发，保留 latch，不代替真实 job 完整生命周期验收 |
 | records-only 恢复启动 | controller 仅在准确维护许可与恢复条件成立时启动 | systemd 原 job、SQLite 只读事实、许可与原件核验及失败恢复；不迁用旧许可，不转换旧记录或增加 Python fallback |
 | watchdog GARM 客户端接入（已合入） | 原停接流程通过 GARM client 完成同一准确目标禁用与读回 | 保留身份、输入、时限、未知登录和禁用请求边界；不同时改造 systemd 停止恢复 |
 | watchdog systemd 停止与恢复（已合入） | 一次停止请求具有可追踪的原 job 与终态核验 | go-systemd 订阅、写前记录、原 job 回执及 unit/进程/cgroup 核验；丢失终态不补造成功，旧 CLI 记录保全拒绝自动迁移，不重新接入或部署 |
@@ -131,7 +131,7 @@ SDK 接入保留现有超时、代理、重定向、响应上限和精确整数�
 
 每次开始后续片前，依据已经到位的消费者重新检查边界。若某一行包含两个可独立验收结果，再拆小。同一恢复不变量跨层时保留在一片，确保中间版本也能安全运行。
 
-已合入组件的具体行为与检查分别由 [firewall](README.md)、[bootstrap](bootstrap.md)、[watchdog](watchdog.md) 和 guard 各入口文档维护。本片交付单次 VM 创建，其余片再按真实依赖选择。日志采集继续消费 rsyslog 与 logrotate，不加入无消费者的 Go 日志程序。
+已合入组件的具体行为与检查分别由 [firewall](README.md)、[bootstrap](bootstrap.md)、[watchdog](watchdog.md) 和 guard 各入口文档维护。本片交付 VM 删除与容量释放，其余片再按真实依赖选择。日志采集继续消费 rsyslog 与 logrotate，不加入无消费者的 Go 日志程序。
 
 ## 构建、验证与后续切换
 
@@ -145,4 +145,4 @@ SDK 接入保留现有超时、代理、重定向、响应上限和精确整数�
 
 ## 交付范围
 
-结构说明随实现保持更新，运行实现按独立业务结果交付。108 份本地历史源码及既有构建检查保全，不整体进入实现 PR。本片交付单次 VM 创建；删除与容量释放、records-only 及运行切换仍待选择。运行版本以稳定交付为准，不拼接修复中的文件。
+结构说明随实现保持更新，运行实现按独立业务结果交付。108 份本地历史源码及既有构建检查保全，不整体进入实现 PR。本片交付 VM 删除与容量释放；records-only、其余 provider 命令及运行切换仍待选择。运行版本以稳定交付为准，不拼接修复中的文件。
