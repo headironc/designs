@@ -91,6 +91,10 @@ func (g *guardFiles) unchanged() bool {
 }
 
 func (s startup) withState(check func(*guardFiles) error) (string, error) {
+	return s.withStatePublication(check, nil)
+}
+
+func (s startup) withStatePublication(check func(*guardFiles) error, publish func() error) (string, error) {
 	if err := absent(s.maintenance); err != nil {
 		return "maintenance", err
 	}
@@ -163,6 +167,11 @@ func (s startup) withState(check func(*guardFiles) error) (string, error) {
 	}
 	if err := absent(s.maintenance); err != nil {
 		return "maintenance", err
+	}
+	if publish != nil {
+		if err := publish(); err != nil {
+			return "publication", err
+		}
 	}
 	return "", nil
 }
