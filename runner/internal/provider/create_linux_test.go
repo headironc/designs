@@ -470,10 +470,15 @@ func testNativeUsesPinnedInputsAndWaits(t *testing.T, command string) {
 				t.Fatalf("running native not cancelled: %v", err)
 			}
 			if command == "DeleteInstance" {
-				raw, _ := os.ReadFile(filepath.Join(s.state, "state.json"))
+				raw, err := os.ReadFile(filepath.Join(s.state, "state.json"))
+				if err != nil {
+					t.Fatal(err)
+				}
 				var state guardState
-				json.Unmarshal(raw, &state)
-				if (isNull(state.Active) && isNull(state.Intent)) != (mode == "success") {
+				if err := json.Unmarshal(raw, &state); err != nil {
+					t.Fatal(err)
+				}
+				if isNull(state.Active) != (mode == "success") || isNull(state.Intent) != (mode == "success") {
 					t.Fatal("native result lost capacity state")
 				}
 			}

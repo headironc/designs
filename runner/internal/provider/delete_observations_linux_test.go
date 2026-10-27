@@ -143,8 +143,11 @@ func TestDeleteLXDTargetAndVacancy(t *testing.T) {
 				return err
 			})
 			beforeOK := mode == "ready" || mode == "receipt" || mode == "retained-complete" || strings.HasPrefix(mode, "remaining-") || mode == "custom-volume" || strings.HasPrefix(mode, "null-")
-			if (before == nil && got != nil && *got == 42) != beforeOK {
+			if beforeOK && (before != nil || got == nil || *got != 42) {
 				t.Fatalf("target accepted=%v agent=%v error=%v", beforeOK, got, before)
+			}
+			if !beforeOK && before == nil && got != nil {
+				t.Fatalf("rejected target returned agent %d", *got)
 			}
 			after := withLXD(ctx, socket, vacantProject)
 			afterOK := mode != "live" && mode != "unknown" && !strings.HasPrefix(mode, "remaining-") && mode != "custom-volume" && !strings.HasPrefix(mode, "null-")
