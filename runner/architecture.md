@@ -1,6 +1,6 @@
 # Runner 的 Go 结构与实施切片
 
-本设计将 runner 自有实现改为 Go，并按独立业务结果交付。[专用防火墙重载](README.md)、[guest bootstrap](bootstrap.md)、[provider 异常停接](watchdog.md)、[Go guard 正常启动准入](startup.md)、[guard watchdog 检查与状态持久化](guard-watchdog.md)、[单次 VM 创建](create.md)和 [VM 删除与容量释放](delete.md)已合入。异常停接已接入 GARM client 与 go-systemd，包含原停止 job 恢复。本片交付 [provider 正常只读协议](read.md)。本文已采用下述 Go 包，依赖随对应消费者接入。现有 Python 快照用于行为对照和原操作恢复。GARM、LXD provider、nginx、rsyslog、Squid 和 dnsproxy 保持各自职责，不重写第三方组件。
+本设计将 runner 自有实现改为 Go，并按独立业务结果交付。[专用防火墙重载](README.md)、[guest bootstrap](bootstrap.md)、[provider 异常停接](watchdog.md)、[Go guard 正常启动准入](startup.md)、[guard watchdog 检查与状态持久化](guard-watchdog.md)、[单次 VM 创建](create.md)、[VM 删除与容量释放](delete.md)和 [provider 正常只读协议](read.md)已合入。异常停接已接入 GARM client 与 go-systemd，包含原停止 job 恢复。本片修正 [ScaleSet 的 provider 池身份](#scaleset-的-provider-池身份)。本文已采用下述 Go 包，依赖随对应消费者接入。现有 Python 快照用于行为对照和原操作恢复。GARM、LXD provider、nginx、rsyslog、Squid 和 dnsproxy 保持各自职责，不重写第三方组件。
 
 跨仓库边界由 [CI 架构](../ci-architecture.md#runner-与-kiln) 维护。designs 拥有 runner 自有程序及发布成品。Kiln 拥有任务镜像，消费仓库拥有工作流和业务检查。新代码在独立工作树准备，原接入现场和未知操作保全。
 
@@ -91,6 +91,18 @@ SDK 接入保留现有超时、代理、重定向、响应上限和精确整数�
 
 ## 保持的协议与故障语义
 
+### ScaleSet 的 provider 池身份
+
+当前消费者是 repository ScaleSet。GARM `v0.2.1` 的创建和列表调用都生成 `scaleset_name + "-" + repository_id`，作为 provider 的 `PoolID`。这是 ScaleSet 的派生标识，不是普通 pool 的 UUID。创建调用链见上游 [instance manager](https://github.com/cloudbase/garm/blob/v0.2.1/workers/provider/instance_manager.go)，列表调用链见 [ScaleSet worker](https://github.com/cloudbase/garm/blob/v0.2.1/workers/scaleset/scaleset.go)。保全来源 `provider.py` 按同一规则生成 policy。
+
+guard 的共享 policy 拥有 `controller_id`、`repository_id`、`scaleset_name`、`pool_id` 和 `image_fingerprint`。controller 与 repository 使用小写 UUID；ScaleSet 名称非空且不含环境变量不能承载的 NUL。`pool_id` 必须与名称和 repository ID 的准确拼接一致，镜像使用小写 SHA256。身份字段缺失、null、错误类型或相互不匹配时，watchdog、创建、删除和正常读取均在观察或写入前拒绝。
+
+请求环境、创建正文和 LXD 的 `user.runner-pool-id` 都与这一个 policy 值逐字比较。不裁剪、改名或接受第二种 UUID 池格式，也不据此迁移原记录。正常启动入口仍只承担文件、摘要和 guard 状态检查；完整身份校验由这些实际消费者执行。
+
+测试从上游派生规则独立给出预期字符串，覆盖六个入口的真实格式准入和错绑定拒绝。native 进程参数及 LXD SDK 回归也使用该格式；同名 VM 的替换测试继续使用另一个合法 VM UUID，避免把身份错配测试变成格式错误测试。未知结果、写前意图和容量释放规则保持。
+
+### 其他协议边界
+
 | 边界 | Go 实现的要求 | 验收重点 |
 | --- | --- | --- |
 | GARM external provider | 保留接口 `v0.1.0`、命令白名单、环境绑定及 native 输出；忙时退出 75 | 合法只读调用、错误身份、超限输入、并发锁、秘密不进入错误输出 |
@@ -120,7 +132,8 @@ SDK 接入保留现有超时、代理、重定向、响应上限和精确整数�
 | Go guard watchdog（已合入） | 现有 Go watchdog 消费完整健康观察及持久化结果 | LXD client、systemd 状态查询、挂载与储备、ready/latch 转换、原子写入和中断拒绝；不清除旧操作，不含 VM 写操作和部署 |
 | Go guard 单次 VM 创建（已合入） | 准入后只调用一次 native 创建，准确核验后保存 active | provider-common 协议、LXD client 核验、写前意图、原进程结束及未知拒重发；不含删除、释放容量或部署 |
 | Go guard VM 删除与容量释放（已合入） | 删除准确绑定实例，原 native 结束和 LXD 核验后才释放 provider 容量 | bootstrap 完成、写前记录、实例/可写卷及 operation 核验；未知拒重发，保留 latch，不代替真实 job 完整生命周期验收 |
-| Go guard 正常只读协议（本片） | GARM 查询 native 版本或准确绑定的实例，guard 记录保持不变 | GetVersion、GetInstance、ListInstances，身份与响应核验；不含 records-only、清记录或部署 |
+| Go guard 正常只读协议（已合入） | GARM 查询 native 版本或准确绑定的实例，guard 记录保持不变 | GetVersion、GetInstance、ListInstances，身份与响应核验；不含 records-only、清记录或部署 |
+| ScaleSet 池身份修正（本片） | 实际 ScaleSet 请求按原派生身份通过完整 guard 调用链 | 共享 policy 校验、实际协议格式回归及错绑定拒绝；不增加普通 pool 模式，不改记录或部署 |
 | records-only 恢复启动 | controller 仅在准确维护许可与恢复条件成立时启动 | systemd 原 job、SQLite 只读事实、许可与原件核验及失败恢复；不迁用旧许可，不转换旧记录或增加 Python fallback |
 | watchdog GARM 客户端接入（已合入） | 原停接流程通过 GARM client 完成同一准确目标禁用与读回 | 保留身份、输入、时限、未知登录和禁用请求边界；不同时改造 systemd 停止恢复 |
 | watchdog systemd 停止与恢复（已合入） | 一次停止请求具有可追踪的原 job 与终态核验 | go-systemd 订阅、写前记录、原 job 回执及 unit/进程/cgroup 核验；丢失终态不补造成功，旧 CLI 记录保全拒绝自动迁移，不重新接入或部署 |
@@ -132,7 +145,7 @@ SDK 接入保留现有超时、代理、重定向、响应上限和精确整数�
 
 每次开始后续片前，依据已经到位的消费者重新检查边界。若某一行包含两个可独立验收结果，再拆小。同一恢复不变量跨层时保留在一片，确保中间版本也能安全运行。
 
-已合入组件的具体行为与检查分别由 [firewall](README.md)、[bootstrap](bootstrap.md)、[watchdog](watchdog.md) 和 guard 各入口文档维护。本片交付正常只读协议，其余片再按真实依赖选择。日志采集继续消费 rsyslog 与 logrotate，不加入无消费者的 Go 日志程序。
+已合入组件的具体行为与检查分别由 [firewall](README.md)、[bootstrap](bootstrap.md)、[watchdog](watchdog.md) 和 guard 各入口文档维护。本片修正共享的 ScaleSet 池身份，其余片再按真实依赖选择。日志采集继续消费 rsyslog 与 logrotate，不加入无消费者的 Go 日志程序。
 
 ## 构建、验证与后续切换
 
@@ -146,4 +159,4 @@ SDK 接入保留现有超时、代理、重定向、响应上限和精确整数�
 
 ## 交付范围
 
-结构说明随实现保持更新，运行实现按独立业务结果交付。108 份本地历史源码及既有构建检查保全，不整体进入实现 PR。本片交付正常只读协议；records-only 和运行切换仍待后续实施。运行版本以稳定交付为准，不拼接修复中的文件。
+结构说明随实现保持更新，运行实现按独立业务结果交付。108 份本地历史源码及既有构建检查保全，不整体进入实现 PR。本片修正 ScaleSet 池身份；records-only 和运行切换仍待后续实施。运行版本以稳定交付为准，不拼接修复中的文件。

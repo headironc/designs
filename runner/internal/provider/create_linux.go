@@ -14,9 +14,7 @@ import (
 )
 
 type createPolicy struct {
-	Controller  string `json:"controller_id"`
-	Pool        string `json:"pool_id"`
-	Image       string `json:"image_fingerprint"`
+	guardPolicy
 	Alias       string `json:"image_alias"`
 	Specs       string `json:"extra_specs_sha256"`
 	ProviderSHA string `json:"provider_sha256"`
@@ -78,7 +76,7 @@ func (s startup) create(ctx context.Context, env map[string]string, input io.Rea
 	phase := "admission"
 	stage, err := s.withState(func(g *guardFiles) error {
 		var p createPolicy
-		if decodeObject(g.policy, &p, true) != nil || !uuid.MatchString(p.Controller) || !uuid.MatchString(p.Pool) || !digest.MatchString(p.Image) || !digest.MatchString(p.Specs) || p.Alias == "" {
+		if decodeObject(g.policy, &p, true) != nil || !p.valid() || !digest.MatchString(p.Specs) || p.Alias == "" {
 			return errRefused
 		}
 		if env["GARM_COMMAND"] != "CreateInstance" || env["GARM_CONTROLLER_ID"] != p.Controller || env["GARM_POOL_ID"] != p.Pool || env["GARM_PROVIDER_CONFIG_FILE"] != s.config || env["GARM_INTERFACE_VERSION"] != "v0.1.0" {

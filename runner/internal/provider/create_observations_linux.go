@@ -79,13 +79,13 @@ func afterCreate(ctx context.Context, p createPolicy, name string) (string, erro
 	var id string
 	err := withLXD(ctx, lxdSocket, func(client lxd.InstanceServer) error {
 		var err error
-		id, err = createdInstance(client, p, name)
+		id, err = createdInstance(client, p.guardPolicy, name)
 		return err
 	})
 	return id, err
 }
 
-func createdInstance(client lxd.InstanceServer, p createPolicy, name string) (string, error) {
+func createdInstance(client lxd.InstanceServer, p guardPolicy, name string) (string, error) {
 	item, _, err := client.GetInstance(name)
 	if err != nil || item == nil || item.Name != name || item.Type != "virtual-machine" || len(item.Profiles) != 1 || item.Profiles[0] != "halo-ci" || item.Config["user.runner-controller-id"] != p.Controller || item.Config["user.runner-pool-id"] != p.Pool || item.Config["volatile.base_image"] != p.Image || !uuid.MatchString(item.Config["volatile.uuid"]) {
 		return "", errRefused

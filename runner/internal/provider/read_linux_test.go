@@ -108,7 +108,7 @@ func TestReadAdmission(t *testing.T) {
 			case "command":
 				env["GARM_COMMAND"] = "RemoveAllInstances"
 			case "controller":
-				env["GARM_CONTROLLER_ID"] = poolID
+				env["GARM_CONTROLLER_ID"] = repositoryID
 			case "pool":
 				env["GARM_POOL_ID"] = controllerID
 			case "config":
