@@ -397,6 +397,8 @@ flowchart TD
 
 同一执行请求与相同输入返回原记录；相同身份而输入不同则拒绝。取消接口只记录原执行的取消意图。查询和恢复沿原 operation 及真实资源进行，结果分别表达工作结论、资源闭合、候选适用性。生命周期和部署各保留一个事实所有者；watchdog 复用生命周期入口，不新增平行状态机。GARM DB、GitHub、LXD 和 systemd 仍各自拥有对应外部事实。
 
+runner 的 [Go 包选型](runner/architecture.md#已采用的-go-包)统一维护 SDK、系统接口和防火墙依赖。各包承担协议与技术访问，runner 仍拥有准入、容量和恢复判断。选型已接受，代码按独立实施片接入；文档合入不表示运行依赖或部署已切换。
+
 ### Rust 与 Halo 的实际消费链
 
 以下源码事实固定到 Nucleus `fc73557bf5b1a63459bc3b67b0eb6de36d229965`，不代表后续分支或线上已切换。[Rust workflow](https://github.com/headironc/nucleus/blob/fc73557bf5b1a63459bc3b67b0eb6de36d229965/.github/workflows/rust.yml)、[Halo workflow](https://github.com/headironc/nucleus/blob/fc73557bf5b1a63459bc3b67b0eb6de36d229965/.github/workflows/halo.yml)

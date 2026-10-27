@@ -1,12 +1,14 @@
 # Runner Go 实现
 
-已交付专用防火墙重载和 [guest bootstrap](bootstrap.md)，当前实现片是 [provider 异常停接](watchdog.md)。`runner-firewall` 供 `nucleiron-firewall.service` 的启动与重载使用。它用 `/usr/sbin/nft` 列出现有表，读取 `/etc/nucleiron-gateway/isolated-network.nft`，检查后应用同一份规则字节。
+已交付专用防火墙重载、[guest bootstrap](bootstrap.md) 和 [provider 异常停接](watchdog.md)。下一实现片为 Go guard 正常启动准入。已采用的 Go 包及后续接入边界见 [架构选型](architecture.md#已采用的-go-包)。以下描述当前已合入的 firewall；目标 nftables 包实现尚未接入。
+
+`runner-firewall` 供 `nucleiron-firewall.service` 的启动与重载使用。它用 `/usr/sbin/nft` 列出现有表，读取 `/etc/nucleiron-gateway/isolated-network.nft`，检查后应用同一份规则字节。
 
 程序只为已存在的 `inet nucleiron` 和 `bridge nucleiron` 表追加删除语句。规则文件沿用宿主的准确配置，不能由工作流或 guest 提供。本片不修改规则内容、端口、域名或路由。规则文件本身仍是受信任的部署输入，程序没有新增 nft 规则语言解析器。
 
 ## 构建与检查
 
-自有 module 只依赖 Go 标准库。Linux amd64 构建固定使用 [Go 1.27.3](https://go.dev/dl/)，即本片核定时的最新稳定版。官方工具链归档 SHA256 为 `65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40`。先下载并验证工具链，再运行检查；检查中不下载工具链或依赖。
+当前自有 module 只依赖 Go 标准库，目标依赖随对应实施片加入 `go.mod` 和 `go.sum`。Linux amd64 构建固定使用 [Go 1.27.3](https://go.dev/dl/)，即本片核定时的最新稳定版。官方工具链归档 SHA256 为 `65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40`。先下载并验证工具链，再运行检查。引入外部包的实施片同时提供固定依赖的下载、校验与缓存准备步骤；下列检查命令保持离线。
 
 在本目录运行：
 
