@@ -1,6 +1,6 @@
 # Runner 的 Go 结构与实施切片
 
-本设计将 runner 自有实现改为 Go，并按独立业务结果交付。当前实现片是 [专用防火墙重载](README.md)，其他 Go 运行能力尚未交付。现有 Python 快照用于行为对照和原操作恢复。GARM、LXD provider、nginx、rsyslog、Squid 和 dnsproxy 保持各自职责，不重写第三方组件。
+本设计将 runner 自有实现改为 Go，并按独立业务结果交付。[专用防火墙重载](README.md)已合入，当前实现片是 [guest bootstrap](bootstrap.md)。现有 Python 快照用于行为对照和原操作恢复。GARM、LXD provider、nginx、rsyslog、Squid 和 dnsproxy 保持各自职责，不重写第三方组件。
 
 跨仓库边界由 [CI 架构](../ci-architecture.md#runner-与-kiln) 维护。designs 拥有 runner 自有程序及发布成品。Kiln 拥有任务镜像，消费仓库拥有工作流和业务检查。新代码在独立工作树准备，原接入现场和未知操作保全。
 
@@ -82,8 +82,8 @@ GARM 仍负责 controller 与其数据库。自有代码通过已采用 API 和�
 | 切片 | 可独立验收的结果 | 包含内容与明确排除 |
 | --- | --- | --- |
 | 结构说明 | 审阅者能定位职责、协议和实施顺序 | 本文及必要导航；不带历史源码大包，不带运行实现 |
-| 专用防火墙重载（当前实现片） | systemd 可消费 Go 入口，检查并原子替换自有 nftables 表 | 实际入口、规则读取、nft 调用、unit 消费绑定、构建与失败测试；不改端口、域名、路由、其他表或生产服务 |
-| guest bootstrap | 原生 provider 渲染并启动 Go guest 程序，产出相同 ready 回执 | JIT 安装、失败反馈、guest 成品与模板绑定；不启用 ScaleSet，不改 controller 凭据 |
+| 专用防火墙重载（已合入） | systemd 可消费 Go 入口，检查并原子替换自有 nftables 表 | 实际入口、规则读取、nft 调用、unit 消费绑定、构建与失败测试；不改端口、域名、路由、其他表或生产服务 |
+| guest bootstrap（当前实现片） | 原生 provider 渲染并启动 Go guest 程序，产出相同 ready 回执 | JIT 安装、失败反馈、guest 成品与模板绑定；不启用 ScaleSet，不改 controller 凭据 |
 | provider 准入与停止接入 | GARM 经 Go guard 执行受限 native 操作，异常时停止接入 | guard、watchdog、records-only 启动校验、原子状态及必要恢复兼容；不创建新 repository 或改变审批范围 |
 | 服务与版本安装窗口 | 在准确前态中停止服务、安装一个版本，并恢复或保留可恢复状态 | systemd 原 job、文件事务、回滚与配置漂移检查；不将通用文件复制单独提前交付 |
 | 凭据消费与连接 | 一次已绑定操作建立并验证 disabled 连接，故障后保留可解释结果 | signer、凭据证明、受保护记录、repository/ScaleSet 回执及只读恢复；稳定 rebind 到达后再确定最小闭包 |
@@ -108,4 +108,4 @@ GARM 仍负责 controller 与其数据库。自有代码通过已采用 API 和�
 
 ## 交付范围
 
-结构说明随实现保持更新，运行实现按独立业务结果交付。108 份本地历史源码及既有构建检查保全，不整体进入实现 PR。当前防火墙片之外的能力仍待后续选择。运行版本以稳定交付为准，不拼接修复中的文件。
+结构说明随实现保持更新，运行实现按独立业务结果交付。108 份本地历史源码及既有构建检查保全，不整体进入实现 PR。当前交付 guest bootstrap，后续能力仍待选择。运行版本以稳定交付为准，不拼接修复中的文件。

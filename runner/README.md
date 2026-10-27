@@ -1,6 +1,6 @@
 # Runner Go 实现
 
-当前实现片是专用防火墙重载。`runner-firewall` 供 `nucleiron-firewall.service` 的启动与重载使用。它用 `/usr/sbin/nft` 列出现有表，读取 `/etc/nucleiron-gateway/isolated-network.nft`，检查后应用同一份规则字节。
+已交付专用防火墙重载，当前实现片是 [guest bootstrap](bootstrap.md)。`runner-firewall` 供 `nucleiron-firewall.service` 的启动与重载使用。它用 `/usr/sbin/nft` 列出现有表，读取 `/etc/nucleiron-gateway/isolated-network.nft`，检查后应用同一份规则字节。
 
 程序只为已存在的 `inet nucleiron` 和 `bridge nucleiron` 表追加删除语句。规则文件沿用宿主的准确配置，不能由工作流或 guest 提供。本片不修改规则内容、端口、域名或路由。规则文件本身仍是受信任的部署输入，程序没有新增 nft 规则语言解析器。
 
