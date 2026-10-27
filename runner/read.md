@@ -8,7 +8,7 @@
 
 三个命令都核对 controller、固定配置路径和 `v0.1.0` 接口版本。`ListInstances` 要求 policy 的准确 pool；其他命令不要求 pool，但提供时也须匹配。`GetInstance` 要求已有合法 active，且 `GARM_INSTANCE_ID` 与记录中的名称一致。其他命令不接受实例名。
 
-native 只收到对应命令、controller 和必要的 pool 或实例名，以及固定描述符的配置路径。不继承额外环境，不读取调用方 stdin。复用创建和删除的摘要绑定、进程组、取消后等待与输出上限：native 最长 300 秒，完整入口最长 330 秒，stdout 最多 2 MiB。native 失败或进程组未结束时，返回拒绝；本入口不自动重试。
+native 只收到对应命令、controller 和必要的 pool 或实例名，以及 `GARM_INTERFACE_VERSION=v0.1.0` 和固定描述符的配置路径。不继承额外环境，不读取调用方 stdin。复用创建和删除的摘要绑定、进程组、取消后等待与输出上限：native 最长 300 秒，完整入口最长 330 秒，stdout 最多 2 MiB。native 失败或进程组未结束时，返回拒绝；本入口不自动重试。
 
 ## 响应与实际身份
 
