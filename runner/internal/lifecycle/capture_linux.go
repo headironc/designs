@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/headironc/designs/runner/internal/provider"
 )
@@ -77,7 +78,7 @@ func unambiguous(raw []byte) error {
 				if !ok {
 					return errRefused
 				}
-				name = strings.ToLower(name)
+				name = foldJSONName(name)
 				if seen[name] {
 					return errRefused
 				}
@@ -105,6 +106,27 @@ func unambiguous(raw []byte) error {
 		return errRefused
 	}
 	return nil
+}
+
+func foldJSONName(name string) string {
+	// encoding/json folds struct fields by Unicode SimpleFold equivalence,
+	// including long s and Kelvin sign. One canonical key per object keeps
+	// duplicate detection linear in the response size, including nested maps.
+	return strings.Map(func(r rune) rune {
+		if r < unicode.MaxASCII+1 {
+			if r >= 'a' && r <= 'z' {
+				return r - ('a' - 'A')
+			}
+			return r
+		}
+		for {
+			next := unicode.SimpleFold(r)
+			if next <= r {
+				return next
+			}
+			r = next
+		}
+	}, name)
 }
 
 func strictObject(raw []byte, target any) error {

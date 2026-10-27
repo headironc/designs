@@ -90,11 +90,23 @@ func readMachine(client lxd.InstanceServer, b provider.ExecutionBinding) (machin
 		}
 	}
 	// All expanded attachments are observed. Only the dedicated root disk and
-	// network/none devices are supported; host paths and passthrough are refused.
+	// managed bridge/none devices are supported; host paths and passthrough are refused.
 	root := false
 	for _, d := range vm.ExpandedDevices {
 		switch d["type"] {
-		case "nic", "none":
+		case "none":
+		case "nic":
+			// ExpandedDevices preserves the profile's network reference. LXD
+			// derives nictype from that network, so absence alone proves nothing.
+			// The controlled producer uses network=nucleiron0 without nictype
+			// or parent; those properties conflict with managed network binding.
+			if d["network"] != "nucleiron0" || d["nictype"] != "" || d["parent"] != "" {
+				return machine{}, errRefused
+			}
+			network, _, err := client.GetNetwork("nucleiron0")
+			if err != nil || network == nil || network.Name != "nucleiron0" || network.Type != "bridge" || !network.Managed || network.Status != api.NetworkStatusCreated {
+				return machine{}, errRefused
+			}
 		case "disk":
 			if root || d["path"] != "/" || d["pool"] != "halo-ci" || d["source"] != "" || d["readonly"] != "" && d["readonly"] != "false" {
 				return machine{}, errRefused

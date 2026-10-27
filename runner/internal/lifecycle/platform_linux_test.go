@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/cloudbase/garm/params"
+	"github.com/google/go-github/v84/github"
 )
 
 type fixtureRoute struct {
@@ -85,6 +86,58 @@ func TestPlatformSDKExactIdentities(t *testing.T) {
 	id, err := p.observe(context.Background(), r, binding())
 	if err != nil || id != 99 {
 		t.Fatalf("ScaleSet %d, %v", id, err)
+	}
+}
+
+func TestPlatformSDKRejectsUnicodeFieldAliases(t *testing.T) {
+	job := "/repos/example/consumer/actions/jobs/9007199254740997"
+	repo := "/repos/example/consumer"
+	for _, tc := range []struct{ name, path, old, replacement string }{
+		{"long-s", job, `"status":"in_progress"`, `"status":"completed","ſtatus":"in_progress"`},
+		{"kelvin", repo, `"name":"consumer"`, `"name":"consumer","fork":false,"forK":true`},
+		{"nested", repo, `"login":"example"`, `"login":"example","site_admin":false,"ſite_admin":true`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bodies := platformBodies()
+			bodies[tc.path] = strings.Replace(bodies[tc.path], tc.old, tc.replacement, 1)
+			if tc.path == job {
+				var decoded github.WorkflowJob
+				if json.Unmarshal([]byte(bodies[tc.path]), &decoded) != nil || decoded.Status == nil || *decoded.Status != "in_progress" {
+					t.Fatal("SDK did not recognize long-s alias")
+				}
+			} else {
+				var decoded github.Repository
+				if json.Unmarshal([]byte(bodies[tc.path]), &decoded) != nil {
+					t.Fatal("invalid repository fixture")
+				}
+				if tc.name == "kelvin" && (decoded.Fork == nil || !*decoded.Fork) {
+					t.Fatal("SDK did not recognize Kelvin alias")
+				}
+				if tc.name == "nested" && (decoded.Owner == nil || decoded.Owner.SiteAdmin == nil || !*decoded.Owner.SiteAdmin) {
+					t.Fatal("SDK did not recognize nested alias")
+				}
+			}
+			p := platformFixture(t, bodies)
+			r, _ := parseRequest([]byte(requestJSON))
+			if _, err := p.observe(context.Background(), r, binding()); err == nil {
+				t.Fatal("SDK accepted duplicate Unicode field aliases")
+			}
+		})
+	}
+}
+
+func TestPlatformSDKPreservesOrdinaryUnicodeMapKeys(t *testing.T) {
+	bodies := platformBodies()
+	path := "/repos/example/consumer"
+	bodies[path] = strings.Replace(bodies[path], `"name":"consumer"`, `"name":"consumer","custom_properties":{"环境":"测试","é":"accent","e":"plain","日本語":"値"}`, 1)
+	var decoded github.Repository
+	if json.Unmarshal([]byte(bodies[path]), &decoded) != nil || decoded.CustomProperties["环境"] != "测试" || decoded.CustomProperties["é"] != "accent" || decoded.CustomProperties["e"] != "plain" {
+		t.Fatal("SDK lost ordinary Unicode map keys")
+	}
+	p := platformFixture(t, bodies)
+	r, _ := parseRequest([]byte(requestJSON))
+	if _, err := p.observe(context.Background(), r, binding()); err != nil {
+		t.Fatal(err)
 	}
 }
 

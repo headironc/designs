@@ -54,7 +54,7 @@ GitHub repository 的 ID、owner/name 和 full name 匹配请求。准确 run at
 
 GARM 的 controller、repository、ScaleSet 和 instance 与请求及 guard 对应。实例 UUID、名称、provider ID、`halo-lxd` provider、ScaleSet 外键及 agent ID 均匹配；实例为 `running`，runner 为 `active`。provider pool 始终使用 ScaleSet name 加 `-` 加 repository UUID。GARM repository 和 ScaleSet 的 forge endpoint 均要求 `github` 类型及公共 GitHub 的 HTTPS base/API URL，允许 URL 的空路径或单个尾斜线。v0.2.1 producer 要求并原样返回这两个 URL，缺失值不能解释成默认端点。
 
-LXD 读取准确 VM 的 UUID、controller、pool、镜像、类型及唯一 profile，并核 running PID。任何进行中或未知状态的 LXD operation 均拒绝。expanded devices 只接受一个专用 root disk 和 network/none 设备；其他磁盘、宿主路径、透传设备及 raw QEMU 配置均拒绝。实例快照和 root 卷快照均要求明确为空。
+LXD 读取准确 VM 的 UUID、controller、pool、镜像、类型及唯一 profile，并核 running PID。任何进行中或未知状态的 LXD operation 均拒绝。expanded devices 只接受一个专用 root disk、受控桥接 NIC 和 none 设备。NIC 沿 `network.py` 的 profile producer 绑定 `network=nucleiron0`，不带与 managed network 冲突的 `nictype` 或 `parent`。入口通过 SDK GET 核实该网络仍为已创建的 managed bridge。固定 LXD 的 `ExpandedDevices` 保留原网络引用，缺少 `nictype` 不能证明普通虚拟 NIC。physical、SR-IOV、未知网络类型、其他磁盘、宿主路径和 raw QEMU 配置均拒绝。实例快照和 root 卷快照均要求明确为空。
 
 root 卷由实际存储 API 读取，保存名称、独立的 `volatile.uuid`、类型、pool、project、content type、location 和 used_by。卷 UUID 由 LXD 独立生成，不以 VM UUID 代替；缺失 UUID、未知附件或额外可写卷均拒绝。专用池允许 image 卷，除此之外只有准确 root 卷。字段来源是固定 LXD 的 `shared/api.StorageVolume` 及 `lxd/storage/backend_lxd.go` 的 `GetNewVolume`，不从 guest 自报数据补造身份。
 
@@ -66,7 +66,7 @@ root 卷由实际存储 API 读取，保存名称、独立的 `volatile.uuid`、
 
 入口先在受保护根目录独占创建 `<operation_id>/`，同步父目录，再用 `O_EXCL` 保存准确请求字节为 `request.json`。原请求一经保留，同一 operation 就不能绑定另一请求或 VM。观察失败保留部分目录，下一次调用拒绝重发采集。
 
-成功记录为 `execution.json`，包含格式版本、实际运行的 runner-admin 成品 SHA256、原请求 SHA256、预期身份、实际身份、guard 原字节及成品摘要，以及 UTC 采集时间。入口从 `/proc/self/exe` 计算实际成品摘要，不从环境猜测 Git commit。文件最多 128 KiB。记录中没有 API 原文、凭据或 guest 自报的身份授权。
+成功记录为 `execution.json`，包含格式版本、实际运行的 runner-admin 成品 SHA256、原请求 SHA256、预期身份、实际身份，以及 guard state、policy 和 native/config 的 SHA256 摘要。记录另存 UTC 采集时间，未保存 guard 原字节。入口从 `/proc/self/exe` 计算实际成品摘要，不从环境猜测 Git commit。文件最多 128 KiB。记录中没有 API 原文、凭据或 guest 自报的身份授权。
 
 入口独占创建文件，同步并读回后，再核受影响身份。只有这些检查完成，才独占创建并同步 `complete.json`，封印版本和准确 `execution.json` SHA256。目录及文件均核 owner/mode、路径身份、普通文件和单链接。所有文件使用 `0600`；所有目录使用 `0700`。准入或封印前检查失败不会发布完成封印。缺少完成封印的 `execution.json` 只是部分材料，不能作为完成回执。封印写入、同步或输出失败则可能留下完整原件，其结果沿原 operation 回读确认，不能把所有错误解释成未完成写入。
 
