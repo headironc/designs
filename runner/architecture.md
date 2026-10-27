@@ -134,7 +134,8 @@ guard 的共享 policy 拥有 `controller_id`、`repository_id`、`scaleset_name
 | Go guard VM 删除与容量释放（已合入） | 删除准确绑定实例，原 native 结束和 LXD 核验后才释放 provider 容量 | bootstrap 完成、写前记录、实例/可写卷及 operation 核验；未知拒重发，保留 latch，不代替真实 job 完整生命周期验收 |
 | Go guard 正常只读协议（已合入） | GARM 查询 native 版本或准确绑定的实例，guard 记录保持不变 | GetVersion、GetInstance、ListInstances，身份与响应核验；不含 records-only、清记录或部署 |
 | ScaleSet 池身份修正（本片） | 实际 ScaleSet 请求按原派生身份通过完整 guard 调用链 | 共享 policy 校验、实际协议格式回归及错绑定拒绝；不增加普通 pool 模式，不改记录或部署 |
-| [原执行闭合诊断](records-recovery.md#实施边界与验收) | 操作者从原执行绑定取得准确闭合事实及缺口 | 实际诊断入口消费 GitHub/GARM/LXD/宿主和 SQLite 只读观察；不签许可、不清记录、不释放容量 |
+| [新 Go 操作分配记录](records-recovery.md#实施边界与验收) | 原资源仍可核验时生成可信请求与实际分配的准确绑定 | 实际入口核平台分配、VM/QEMU/cgroup/存储身份并独占持久化；不创建 VM、注册 runner 或派发 job，不迁用旧记录 |
+| [原执行闭合诊断](records-recovery.md#实施边界与验收) | 操作者从新 Go 原执行记录取得准确闭合事实及缺口 | 实际诊断入口消费 GitHub/GARM/LXD/宿主和 SQLite 只读观察；不签许可、不清记录、不释放容量 |
 | [records-only 维护窗口](records-recovery.md) | 在准确许可下清理原 GARM 遗留记录，并回到停止且停接的状态 | 签发、原 job 启动准入、维护读取、清理、停止、guard 恢复和许可退役；不迁用旧许可，不含正常服务恢复或启用接单 |
 | watchdog GARM 客户端接入（已合入） | 原停接流程通过 GARM client 完成同一准确目标禁用与读回 | 保留身份、输入、时限、未知登录和禁用请求边界；不同时改造 systemd 停止恢复 |
 | watchdog systemd 停止与恢复（已合入） | 一次停止请求具有可追踪的原 job 与终态核验 | go-systemd 订阅、写前记录、原 job 回执及 unit/进程/cgroup 核验；丢失终态不补造成功，旧 CLI 记录保全拒绝自动迁移，不重新接入或部署 |
