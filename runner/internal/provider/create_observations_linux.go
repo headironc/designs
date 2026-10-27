@@ -16,6 +16,17 @@ func beforeCreate(ctx context.Context, p createPolicy) error {
 }
 
 func createVacancy(client lxd.InstanceServer, p createPolicy) error {
+	if err := vacantProject(client); err != nil {
+		return err
+	}
+	alias, _, err := client.GetImageAlias(p.Alias)
+	if err != nil || alias == nil || alias.Target != p.Image {
+		return errRefused
+	}
+	return nil
+}
+
+func vacantProject(client lxd.InstanceServer) error {
 	// Containers and other leftovers also occupy this dedicated project.
 	all, err := client.GetInstances(lxd.GetInstancesArgs{})
 	if err != nil || len(all) != 0 {
@@ -30,14 +41,7 @@ func createVacancy(client lxd.InstanceServer, p createPolicy) error {
 			return errRefused
 		}
 	}
-	if err := noLiveOperations(client); err != nil {
-		return err
-	}
-	alias, _, err := client.GetImageAlias(p.Alias)
-	if err != nil || alias == nil || alias.Target != p.Image {
-		return errRefused
-	}
-	return nil
+	return noLiveOperations(client)
 }
 
 // SDK zero values must not turn absent inventory into evidence of vacancy.
