@@ -226,18 +226,31 @@ func (o *observer) fallback(parent context.Context, stage string) int {
 	// Persist before requesting a stop; no subsequent tick repeats an unknown job.
 	path := filepath.Join(o.dir, "stop-request.json")
 	r := &stopRecord{Version: 2, Unit: controllerUnit}
-	data, err := json.Marshal(r)
-	if err != nil || writeExclusive(path, data) != nil {
-		o.event(stage, "stop_not_sent_inspect_state")
-		return 1
-	}
-	if err := syncDir(o.dir); err != nil {
-		o.event(stage, "stop_not_sent_inspect_state")
-		return 1
+	persisted := false
+	save := func() error {
+		if persisted {
+			return o.saveStop(r)
+		}
+		data, err := json.Marshal(r)
+		if err != nil {
+			return err
+		}
+		if err := writeExclusive(path, data); err != nil {
+			return err
+		}
+		if err := syncDir(o.dir); err != nil {
+			return err
+		}
+		persisted = true
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 15*time.Second)
 	defer cancel()
-	if err := o.stop.request(ctx, r, func() error { return o.saveStop(r) }); err != nil {
+	if err := o.stop.request(ctx, r, save); err != nil {
+		if _, statErr := os.Lstat(path); errors.Is(statErr, os.ErrNotExist) {
+			o.event(stage, "stop_not_sent_inspect_state")
+			return 1
+		}
 		o.event(stage, "controller_stop_unconfirmed")
 		return 1
 	}

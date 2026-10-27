@@ -340,9 +340,6 @@ func TestStopCrashHelper(t *testing.T) {
 	dir := os.Getenv("WATCHDOG_STOP_DIR")
 	r := &stopRecord{Version: 2, Unit: controllerUnit}
 	save := func() error { return atomicJSON(dir, "stop-request.json", r) }
-	if err := save(); err != nil {
-		t.Fatal(err)
-	}
 	s := &systemdStop{
 		connect: func(ctx context.Context) (*stopBus, error) { return connectStop(ctx, os.Getenv("WATCHDOG_STOP_BUS")) },
 		boot:    func() (string, error) { return testBinding.Controller, nil },
@@ -482,5 +479,32 @@ func TestStopConnectionCancellation(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("authentication ignored cancellation")
+	}
+}
+
+func TestConnectFailureDoesNotRecordAnUnsentStop(t *testing.T) {
+	f := setup(t)
+	f.mode = "wrong-controller"
+	bus := newBusFixture(t, filepath.Join(f.o.dir, "stop-request.json"))
+	f.o.stop = bus.stopper
+	connect := bus.stopper.connect
+	bus.stopper.connect = func(ctx context.Context) (*stopBus, error) {
+		return connectStop(ctx, filepath.Join(t.TempDir(), "absent-bus"))
+	}
+	if f.run(context.Background()) != 1 || bus.stopCount() != 0 {
+		t.Fatal("unexpected first stop")
+	}
+	if _, err := os.Lstat(bus.record); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unsent stop recorded: %v", err)
+	}
+	if !strings.Contains(f.log.String(), "stop_not_sent_inspect_state") {
+		t.Fatal(f.log.String())
+	}
+	bus.stopper.connect = connect
+	if f.run(context.Background()) != 1 || bus.stopCount() != 1 {
+		t.Fatal("later stop did not proceed")
+	}
+	if r := loadStop(t, bus.record); !r.Stopped || r.Result != "done" {
+		t.Fatalf("record=%+v", r)
 	}
 }

@@ -24,7 +24,7 @@ watchdog 在独立的 `/var/lib/nucleiron-watchdog` 保存记录。目录由 roo
 
 登录响应丢失时，`login_pending` 保持为真；新调用拒绝再次登录。成功收到 token 后，程序持久化 `login_pending=false`。token 仅驻留内存，用于后续请求。禁用结果不明时保留原 ID，新调用只能读取该 ID。看到仍启用、对象缺失或身份变化均不重发 PUT。准确读回禁用后才清除未结意图。policy 变化和不支持的状态记录均拒绝继续。
 
-停接失败时，程序先独占写入并同步版本 `2` 的 `stop-request.json`。随后通过固定的 `/run/dbus/system_bus_socket` 连接 system bus，先订阅 `JobRemoved`。程序持久化 boot ID、bus ID 与 manager 的唯一 owner、unit 运行 ID、cgroup 路径，以及主进程和控制进程的 PID/starttime，再调用一次 `StopUnit(nucleiron.service, fail)`。`fail` 模式不替换冲突 job。状态或意图保存失败时，不发送停止请求。记录不保存凭据。
+停接失败时，程序通过固定的 `/run/dbus/system_bus_socket` 连接 system bus，先订阅 `JobRemoved`，再读取停止所需的身份。只读准备失败时尚未创建停止记录，也未发送 StopUnit；后续 tick 可以重新准备。准备成功后，程序独占写入并同步版本 `2` 的 `stop-request.json`，保存 boot ID、bus ID 与 manager 的唯一 owner、unit 运行 ID、cgroup 路径，以及主进程和控制进程的 PID/starttime，再调用一次 `StopUnit(nucleiron.service, fail)`。`fail` 模式不替换冲突 job。发送前的停止意图无法持久化时不发送请求；请求后的 job 回执无法持久化时，结果保持未确认且不重发。已经写入的停止记录不会因失败被自动删除。记录不保存凭据。
 
 请求返回后立即持久化原 job ID。只有原 manager 发出的信号，其 job ID、job 路径和 unit 均准确匹配，才作为终态回执保存。job 路径固定为 `/org/freedesktop/systemd1/job/<ID>`。先订阅的顺序能保留早于方法返回的完成信号；[systemd 接口文档](https://www.freedesktop.org/software/systemd/man/latest/org.freedesktop.systemd1.html)也要求按此顺序跟踪请求。未知 job 结果、错误身份或读取失败均拒绝确认。
 

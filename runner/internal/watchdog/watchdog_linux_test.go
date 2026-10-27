@@ -23,7 +23,10 @@ var testBinding = binding{Controller: "11111111-1111-4111-8111-111111111111", Re
 
 type testStop func(context.Context) error
 
-func (s testStop) request(ctx context.Context, _ *stopRecord, _ func() error) error {
+func (s testStop) request(ctx context.Context, _ *stopRecord, save func() error) error {
+	if err := save(); err != nil {
+		return err
+	}
 	return s(ctx)
 }
 

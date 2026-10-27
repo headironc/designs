@@ -155,10 +155,10 @@ func (s *systemdStop) request(ctx context.Context, r *stopRecord, save func() er
 			return errRefused
 		}
 	}
-	if err := save(); err != nil {
+	if err := s.sameManager(ctx, b, r); err != nil {
 		return err
 	}
-	if err := s.sameManager(ctx, b, r); err != nil {
+	if err := save(); err != nil {
 		return err
 	}
 	// Fail rather than replace a conflicting job. A failed call may have been
