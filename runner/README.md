@@ -20,7 +20,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o .build/runner-firewa
 
 普通测试使用实际子进程替身核对 nft 的参数、标准输入、错误及调用次数。测试不调用宿主 nft。规则在检查期间变化时，应用仍使用检查过的字节；检查失败不进入应用，应用失败不自动重试。
 
-Linux 的实际 nft 测试另用一次性的用户和网络 namespace。要求宿主支持无特权 user namespace，已安装 nft；任何权限拒绝都保留为未运行，不用 sudo 绕过。
+Linux 的实际 nft 测试另用一次性的用户和网络 namespace。宿主必须支持无特权 user namespace，并已安装 nft。namespace 创建被拒绝时，测试命令失败，实际 nft 验证未运行。保留该失败，不用 sudo 绕过。
 
 ```sh
 RUNNER_FIREWALL_NAMESPACE=1 go test -count=1 -tags=integration \
