@@ -1,6 +1,6 @@
 # Runner 的 Go 结构与实施切片
 
-本设计将 runner 自有实现改为 Go，并按独立业务结果交付。[专用防火墙重载](README.md)、[guest bootstrap](bootstrap.md) 和 [provider 异常停接](watchdog.md) 已合入。本片交付 [Go guard 正常启动准入](startup.md)。本文已采用下述 Go 包，依赖随对应消费者接入。现有 Python 快照用于行为对照和原操作恢复。GARM、LXD provider、nginx、rsyslog、Squid 和 dnsproxy 保持各自职责，不重写第三方组件。
+本设计将 runner 自有实现改为 Go，并按独立业务结果交付。[专用防火墙重载](README.md)、[guest bootstrap](bootstrap.md)、[provider 异常停接](watchdog.md) 和 [Go guard 正常启动准入](startup.md) 已合入。本片交付 [guard watchdog 检查与状态持久化](guard-watchdog.md)。本文已采用下述 Go 包，依赖随对应消费者接入。现有 Python 快照用于行为对照和原操作恢复。GARM、LXD provider、nginx、rsyslog、Squid 和 dnsproxy 保持各自职责，不重写第三方组件。
 
 跨仓库边界由 [CI 架构](../ci-architecture.md#runner-与-kiln) 维护。designs 拥有 runner 自有程序及发布成品。Kiln 拥有任务镜像，消费仓库拥有工作流和业务检查。新代码在独立工作树准备，原接入现场和未知操作保全。
 
@@ -116,7 +116,8 @@ SDK 接入保留现有超时、代理、重定向、响应上限和精确整数�
 | 专用防火墙重载（已合入） | systemd 可消费 Go 入口，检查并原子替换自有 nftables 表 | 实际入口、规则读取、nft 调用、unit 消费绑定、构建与失败测试；不改端口、域名、路由、其他表或生产服务 |
 | guest bootstrap（已合入） | 原生 provider 渲染并启动 Go guest 程序，产出相同 ready 回执 | JIT 安装、失败反馈、guest 成品与模板绑定；不启用 ScaleSet，不改 controller 凭据 |
 | provider 异常停接（已合入） | Go watchdog 消费 guard 检查接口，异常时停止准确目标的接入 | 身份核验、禁用及读回、未知请求记录、失败停止请求；不迁移 guard 或 records-only，不启用服务 |
-| Go guard 正常启动准入（本片） | controller 正常启动前核准配置、程序摘要与 guard 状态 | 标准库与 x/sys 文件保护、并发锁、intent/latch 拒绝；active 保留容量，所有维护模式启动拒绝；不含 VM 写操作和 records-only |
+| Go guard 正常启动准入（已合入） | controller 正常启动前核准配置、程序摘要与 guard 状态 | 标准库与 x/sys 文件保护、并发锁、intent/latch 拒绝；active 保留容量，所有维护模式启动拒绝；不含 VM 写操作和 records-only |
+| Go guard watchdog（本片） | 现有 Go watchdog 消费完整健康观察及持久化结果 | LXD client、systemd 状态查询、挂载与储备、ready/latch 转换、原子写入和中断拒绝；不清除旧操作，不含 VM 写操作和部署 |
 | Go guard VM 准入与写操作 | GARM 经 Go guard 执行准确绑定的 native 操作 | provider-common 协议、LXD client 核验、写前意图和失败恢复；下一次创建等待上一执行完整闭合，不仅检查 VM/卷消失 |
 | records-only 恢复启动 | controller 仅在准确维护许可与恢复条件成立时启动 | systemd 原 job、SQLite 只读事实、许可与原件核验及失败恢复；不迁用旧许可，不转换旧记录或增加 Python fallback |
 | watchdog GARM 客户端接入 | 原停接流程通过 GARM client 完成同一准确目标禁用与读回 | 保留身份、输入、时限、未知登录和禁用请求边界；不同时改造 systemd 停止恢复 |
@@ -129,7 +130,7 @@ SDK 接入保留现有超时、代理、重定向、响应上限和精确整数�
 
 每次开始后续片前，依据已经到位的消费者重新检查边界。若某一行包含两个可独立验收结果，再拆小。同一恢复不变量跨层时保留在一片，确保中间版本也能安全运行。
 
-已合入组件的具体行为与检查分别由 [firewall](README.md)、[bootstrap](bootstrap.md) 和 [watchdog](watchdog.md) 维护。已选正常启动片先完成自身准入结果，其余片再按真实依赖选择。日志采集继续消费 rsyslog 与 logrotate，不加入无消费者的 Go 日志程序。
+已合入组件的具体行为与检查分别由 [firewall](README.md)、[bootstrap](bootstrap.md)、[watchdog](watchdog.md) 和 guard 各入口文档维护。本片完成 watchdog 的状态转换及实际消费，其余片再按真实依赖选择。日志采集继续消费 rsyslog 与 logrotate，不加入无消费者的 Go 日志程序。
 
 ## 构建、验证与后续切换
 

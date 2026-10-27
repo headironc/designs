@@ -58,7 +58,7 @@ func Run(ctx context.Context, output io.Writer) int {
 		dir: "/var/lib/nucleiron-watchdog", policy: "/etc/nucleus-halo/provider-policy.json",
 		password: "/etc/nucleus-halo/admin-password", output: output, api: api,
 		check: func(ctx context.Context) (int, error) {
-			return command(ctx, 90*time.Second, "/usr/sbin/runuser", "-u", "nucleiron", "-g", "nucleiron", "-G", "lxd", "--", "/opt/nucleus-halo/bin/guarded-lxd-provider", "--watchdog-check")
+			return command(ctx, 90*time.Second, "/usr/sbin/runuser", "-u", "nucleiron", "-g", "nucleiron", "-G", "lxd", "--", "/opt/nucleus-halo/bin/guarded-provider", "--watchdog-check")
 		},
 		stop: func(ctx context.Context) error {
 			code, err := command(ctx, 15*time.Second, "/usr/bin/systemctl", "stop", "--no-block", "nucleiron.service")
