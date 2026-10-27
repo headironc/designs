@@ -42,7 +42,7 @@ type observer struct {
 	uid                   uint32
 	output                io.Writer
 	check                 func(context.Context) (int, error)
-	stop                  func(context.Context) error
+	stop                  stopManager
 	api                   *controller
 }
 
@@ -60,13 +60,7 @@ func Run(ctx context.Context, output io.Writer) int {
 		check: func(ctx context.Context) (int, error) {
 			return command(ctx, 90*time.Second, "/usr/sbin/runuser", "-u", "nucleiron", "-g", "nucleiron", "-G", "lxd", "--", "/opt/nucleus-halo/bin/guarded-provider", "--watchdog-check")
 		},
-		stop: func(ctx context.Context) error {
-			code, err := command(ctx, 15*time.Second, "/usr/bin/systemctl", "stop", "--no-block", "nucleiron.service")
-			if err != nil || code != 0 {
-				return errRefused
-			}
-			return nil
-		},
+		stop: hostStop(),
 	}
 	return o.run(ctx)
 }
@@ -103,10 +97,16 @@ func (o *observer) run(parent context.Context) int {
 	}
 	defer lock.Close()
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-	// A previous stop request owns its original systemd job, even after a lost reply.
-	if _, err := os.Lstat(filepath.Join(o.dir, "stop-request.json")); !errors.Is(err, os.ErrNotExist) {
-		o.event("previous_stop", "inspect_original_stop")
-		return 1
+	// A previous stop request owns its original job. Recovery never enters the
+	// guard/GARM path or grants permission to send another stop request.
+	if r, err := o.savedStop(); !errors.Is(err, os.ErrNotExist) {
+		if err != nil {
+			o.event("previous_stop", "inspect_original_stop")
+			return 1
+		}
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 15*time.Second)
+		defer cancel()
+		return o.resumeStop(ctx, r)
 	}
 	ctx, cancel := context.WithTimeout(parent, 125*time.Second)
 	defer cancel()
@@ -225,7 +225,9 @@ func (o *observer) disable(ctx context.Context, token string, state *receipt) (s
 func (o *observer) fallback(parent context.Context, stage string) int {
 	// Persist before requesting a stop; no subsequent tick repeats an unknown job.
 	path := filepath.Join(o.dir, "stop-request.json")
-	if err := writeExclusive(path, []byte(`{"version":1,"status":"pending"}`)); err != nil {
+	r := &stopRecord{Version: 2, Unit: controllerUnit}
+	data, err := json.Marshal(r)
+	if err != nil || writeExclusive(path, data) != nil {
 		o.event(stage, "stop_not_sent_inspect_state")
 		return 1
 	}
@@ -235,16 +237,11 @@ func (o *observer) fallback(parent context.Context, stage string) int {
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 15*time.Second)
 	defer cancel()
-	if err := o.stop(ctx); err != nil {
+	if err := o.stop.request(ctx, r, func() error { return o.saveStop(r) }); err != nil {
 		o.event(stage, "controller_stop_unconfirmed")
 		return 1
 	}
-	// systemctl --no-block confirms submission, not service or job termination.
-	if err := atomicJSON(o.dir, "stop-request.json", map[string]any{"version": 1, "status": "requested"}); err != nil {
-		o.event(stage, "controller_stop_unconfirmed")
-		return 1
-	}
-	o.event(stage, "controller_stop_requested_inspect_state")
+	o.event(stage, "controller_stopped_admission_locked")
 	return 1
 }
 

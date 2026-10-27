@@ -21,6 +21,16 @@ import (
 
 var testBinding = binding{Controller: "11111111-1111-4111-8111-111111111111", Repository: "22222222-2222-4222-8222-222222222222", ScaleSet: "nucleiron-halo"}
 
+type testStop func(context.Context) error
+
+func (s testStop) request(ctx context.Context, _ *stopRecord, _ func() error) error {
+	return s(ctx)
+}
+
+func (s testStop) recover(context.Context, *stopRecord, func() error) error {
+	return errRefused
+}
+
 type fixture struct {
 	mu          sync.Mutex
 	o           observer
@@ -36,7 +46,7 @@ func setup(t *testing.T) *fixture {
 	f := &fixture{enabled: true}
 	root := t.TempDir()
 	f.o = observer{dir: filepath.Join(root, "state"), policy: filepath.Join(root, "policy"), password: filepath.Join(root, "password"), uid: uint32(os.Getuid()), output: &f.log,
-		check: func(context.Context) (int, error) { return 1, nil }, stop: func(context.Context) error { f.stops++; return nil }}
+		check: func(context.Context) (int, error) { return 1, nil }, stop: testStop(func(context.Context) error { f.stops++; return nil })}
 	data, _ := json.Marshal(testBinding)
 	if err := os.WriteFile(f.o.policy, data, 0644); err != nil {
 		t.Fatal(err)
@@ -365,7 +375,7 @@ func TestProtectedFilesAndStopFailure(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			f := setup(t)
 			if mode == "stop-failure" {
-				f.o.stop = func(context.Context) error { f.stops++; return errors.New("private command diagnostic") }
+				f.o.stop = testStop(func(context.Context) error { f.stops++; return errors.New("private command diagnostic") })
 			}
 			if mode != "stop-failure" && mode != "cancelled" {
 				if err := os.Remove(f.o.password); err != nil {
@@ -410,7 +420,7 @@ func TestProtectedFilesAndStopFailure(t *testing.T) {
 			defer cancel()
 			if mode == "cancelled" {
 				cancel()
-				f.o.stop = func(ctx context.Context) error { f.stops++; return ctx.Err() }
+				f.o.stop = testStop(func(ctx context.Context) error { f.stops++; return ctx.Err() })
 			}
 			if got := f.run(ctx); got != 1 || f.stops != 1 {
 				t.Fatalf("exit=%d stops=%d", got, f.stops)
