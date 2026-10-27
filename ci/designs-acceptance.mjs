@@ -172,10 +172,10 @@ protect(toolsRoot);
 const { designsChecks, verifyDesigns } = await import(
   pathToFileURL(path.join(policy, "policy/docs.ts")).href
 );
-// This test target is deliberately synthetic; the final real repository ID is independently provided.
+// The repository target is real; source commits and provenance remain local test fixtures.
 const target = {
-  repository: "fixture/designs",
-  repositoryId: "1",
+  repository: "headironc/designs",
+  repositoryId: "1434658318",
   target: "main",
   workflow: ".github/workflows/docs.yml",
 };
