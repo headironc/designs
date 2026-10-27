@@ -4,7 +4,7 @@
 
 ## 当前设计
 
-- [CI、审查、准入与运行体系](ci-architecture.md)：跨库架构的唯一正文。当前先完成架构及两库采纳合同；已选的首个实现片是可信 CI 执行与报告，agents 与 Nucleus 的产品 WIP 保全。runner 的 Python 流程已停止，原操作与恢复现场保留；Go 停接、正常启动、guard watchdog、GARM client、systemd 停止恢复、VM 创建与删除已合入，本片交付 provider 正常只读协议。
+- [CI、审查、准入与运行体系](ci-architecture.md)：跨库架构的唯一正文。当前先完成架构及两库采纳合同；已选的首个实现片是可信 CI 执行与报告，agents 与 Nucleus 的产品 WIP 保全。runner 的 Python 流程已停止，原操作与恢复现场保留；Go 停接、正常启动、guard watchdog、GARM client、systemd 停止恢复、VM 创建、删除与正常读取已合入，本片修正 ScaleSet 的 provider 池身份。
 - [Rust 与 Halo 共用 runner](ci-architecture.md#runner-与-kiln)：共用基础设施、两层镜像、不可信池边界、生命周期、缓存和接入验收；文档收录不表示已部署。
 - [Runner 的 Go 结构与实施切片](runner/architecture.md)：自有代码职责、已采用的 Go 包、协议与恢复边界，以及小 PR 顺序。[单次 VM 创建](runner/create.md)与 [VM 删除](runner/delete.md)保留准确目标、写前记录和未知结果不重发语义，删除确认后才释放 provider 容量。[正常读取](runner/read.md)核验版本与绑定实例，保持 guard 记录。
 

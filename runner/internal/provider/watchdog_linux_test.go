@@ -19,12 +19,13 @@ import (
 )
 
 const controllerID = "11111111-2222-4333-8444-555555555555"
-const poolID = "22222222-2222-4333-8444-555555555555"
+const repositoryID = "22222222-2222-4333-8444-555555555555"
+const poolID = "nucleiron-halo-22222222-2222-4333-8444-555555555555"
 
 func watchdogFixture(t *testing.T) (startup, health) {
 	t.Helper()
 	s := fixture(t)
-	p := map[string]string{"provider_sha256": fileSHA(t, s.native), "config_sha256": fileSHA(t, s.config), "controller_id": controllerID, "pool_id": poolID, "image_fingerprint": strings.Repeat("a", 64)}
+	p := map[string]string{"provider_sha256": fileSHA(t, s.native), "config_sha256": fileSHA(t, s.config), "controller_id": controllerID, "repository_id": repositoryID, "scaleset_name": "nucleiron-halo", "pool_id": poolID, "image_fingerprint": strings.Repeat("a", 64)}
 	raw, _ := json.Marshal(p)
 	write(t, s.policy, raw, 0644)
 	return s, health{capacity: func(context.Context) error { return nil }, ready: func(context.Context, guardPolicy, activeInstance) (*int64, error) { return nil, nil }, now: func() time.Time { return time.Unix(1793000000, 125000000) }}

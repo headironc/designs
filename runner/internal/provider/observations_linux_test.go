@@ -95,7 +95,7 @@ func TestLXDAdapter(t *testing.T) {
 			defer server.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			agent, err := lxdReady(ctx, socket, guardPolicy{controllerID, poolID, strings.Repeat("a", 64)}, activeInstance{Name: "runner-one", UUID: controllerID})
+			agent, err := lxdReady(ctx, socket, guardPolicy{Controller: controllerID, Repository: repositoryID, ScaleSet: "nucleiron-halo", Pool: poolID, Image: strings.Repeat("a", 64)}, activeInstance{Name: "runner-one", UUID: controllerID})
 			if (err != nil) != tc.fail {
 				t.Fatalf("agent=%v err=%v", agent, err)
 			}

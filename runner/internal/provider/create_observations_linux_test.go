@@ -28,7 +28,7 @@ func TestCreateLXDObservations(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			p := createPolicy{Controller: controllerID, Pool: poolID, Image: strings.Repeat("a", 64), Alias: "runner-image"}
+			p := createPolicy{guardPolicy: guardPolicy{Controller: controllerID, Repository: repositoryID, ScaleSet: "nucleiron-halo", Pool: poolID, Image: strings.Repeat("a", 64)}, Alias: "runner-image"}
 			server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != "GET" {
 					t.Error("write request")
@@ -112,12 +112,15 @@ func TestCreateLXDObservations(t *testing.T) {
 			if (before == nil) != beforeOK {
 				t.Fatalf("preflight: %v", before)
 			}
-			after := withLXD(ctx, socket, func(client lxd.InstanceServer) error { _, err := createdInstance(client, p, "runner-one"); return err })
+			after := withLXD(ctx, socket, func(client lxd.InstanceServer) error {
+				_, err := createdInstance(client, p.guardPolicy, "runner-one")
+				return err
+			})
 			afterOK := mode != "running" && mode != "unknown-status" && mode != "null-operations" && mode != "null-group" && mode != "wrong-instance" && mode != "wrong-uuid"
 			if (after == nil) != afterOK {
 				t.Fatalf("post-create: %v", after)
 			}
-			for _, id := range []string{controllerID, poolID} {
+			for _, id := range []string{controllerID, repositoryID} {
 				bound := withLXD(ctx, socket, func(client lxd.InstanceServer) error {
 					return boundInstance(client, guardPolicy{Controller: p.Controller, Pool: p.Pool, Image: p.Image}, activeInstance{Name: "runner-one", UUID: id})
 				})

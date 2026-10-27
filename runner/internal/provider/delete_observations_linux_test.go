@@ -63,9 +63,9 @@ func TestDeleteLXDTargetAndVacancy(t *testing.T) {
 					case "name":
 						name = "replacement"
 					case "uuid":
-						config["volatile.uuid"] = poolID
+						config["volatile.uuid"] = repositoryID
 					case "controller":
-						config["user.runner-controller-id"] = poolID
+						config["user.runner-controller-id"] = repositoryID
 					case "pool":
 						config["user.runner-pool-id"] = controllerID
 					case "image":

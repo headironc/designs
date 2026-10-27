@@ -66,7 +66,7 @@ func (s startup) read(ctx context.Context, env map[string]string, r reader) (str
 	var response []byte
 	stage, err := s.withState(func(g *guardFiles) error {
 		var p readPolicy
-		if decodeObject(g.policy, &p, true) != nil || !uuid.MatchString(p.Controller) || !uuid.MatchString(p.Pool) || !digest.MatchString(p.Image) || !normalState(g.raw) {
+		if decodeObject(g.policy, &p, true) != nil || !p.valid() || !normalState(g.raw) {
 			return errRefused
 		}
 		command, name := env["GARM_COMMAND"], env["GARM_INSTANCE_ID"]
@@ -175,7 +175,7 @@ func boundRead(ctx context.Context, p guardPolicy, active activeInstance) error 
 }
 
 func boundInstance(client lxd.InstanceServer, p guardPolicy, active activeInstance) error {
-	id, err := createdInstance(client, createPolicy{Controller: p.Controller, Pool: p.Pool, Image: p.Image}, active.Name)
+	id, err := createdInstance(client, p, active.Name)
 	if err != nil || id != active.UUID {
 		return errRefused
 	}
