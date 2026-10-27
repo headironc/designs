@@ -1,6 +1,6 @@
 # Runner Go 实现
 
-已交付专用防火墙重载、[guest bootstrap](bootstrap.md)、[provider 异常停接](watchdog.md)、[Go guard 正常启动准入](startup.md) 和 [guard watchdog 检查与状态持久化](guard-watchdog.md)。异常停接已接入 GARM client 与 go-systemd，包含原停止 job 恢复。本片交付[单次 VM 创建准入与执行](create.md)。已采用的 Go 包及后续接入边界见 [架构选型](architecture.md#已采用的-go-包)。以下描述当前已合入的 firewall；目标 nftables 包实现尚未接入。
+已交付专用防火墙重载、[guest bootstrap](bootstrap.md)、[provider 异常停接](watchdog.md)、[Go guard 正常启动准入](startup.md)、[guard watchdog 检查与状态持久化](guard-watchdog.md) 和[单次 VM 创建](create.md)。异常停接已接入 GARM client 与 go-systemd，包含原停止 job 恢复。本片交付 [VM 删除与容量释放](delete.md)。已采用的 Go 包及后续接入边界见 [架构选型](architecture.md#已采用的-go-包)。以下描述当前已合入的 firewall；目标 nftables 包实现尚未接入。
 
 `runner-firewall` 供 `nucleiron-firewall.service` 的启动与重载使用。它用 `/usr/sbin/nft` 列出现有表，读取 `/etc/nucleiron-gateway/isolated-network.nft`，检查后应用同一份规则字节。
 

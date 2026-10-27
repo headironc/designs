@@ -17,8 +17,11 @@ func main() {
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 		defer cancel()
 		environment := make(map[string]string)
-		for _, key := range []string{"GARM_COMMAND", "GARM_CONTROLLER_ID", "GARM_POOL_ID", "GARM_PROVIDER_CONFIG_FILE", "GARM_INTERFACE_VERSION"} {
+		for _, key := range []string{"GARM_COMMAND", "GARM_CONTROLLER_ID", "GARM_POOL_ID", "GARM_INSTANCE_ID", "GARM_PROVIDER_CONFIG_FILE", "GARM_INTERFACE_VERSION"} {
 			environment[key] = os.Getenv(key)
+		}
+		if environment["GARM_COMMAND"] == "DeleteInstance" {
+			os.Exit(provider.Delete(ctx, environment, os.Stderr))
 		}
 		os.Exit(provider.Create(ctx, environment, os.Stdin, os.Stdout, os.Stderr))
 	}
