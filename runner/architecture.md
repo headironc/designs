@@ -61,7 +61,7 @@ GARM 仍负责 controller 与其数据库。自有代码通过已采用 API 和�
 
 ## 已采用的 Go 包
 
-以下选型覆盖整个 runner，均为已接受的目标依赖。正常启动已接入 `x/sys`，guard watchdog 已接入 LXD client 和 go-systemd 的只读单元查询，异常停接已接入 GARM client。本片将 go-systemd 接入异常停接的停止与恢复链；其余包随首个真实消费者进入独立实施片。已有实现也按表中目标迁移，不建立双版本兼容路径。
+以下选型覆盖整个 runner，均为已接受的目标依赖。正常启动已接入 `x/sys`，guard watchdog 已接入 LXD client 和 go-systemd 的只读单元查询。异常停接已接入 GARM client 与 go-systemd，包含原停止 job 恢复。本片将 provider-common 与 LXD client 用于单次 VM 创建准入和结果核验；其余包随首个真实消费者进入独立实施片。已有实现也按表中目标迁移，不建立双版本兼容路径。
 
 | 包与上游 | 承担的能力与消费者 | 自有代码保留的责任 |
 | --- | --- | --- |

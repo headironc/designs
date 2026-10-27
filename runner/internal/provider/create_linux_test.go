@@ -50,6 +50,21 @@ func createFixture(t *testing.T) (startup, createPolicy, map[string]string, []by
 	return s, p, env, input, c
 }
 
+func TestCreateUpdatePolicyComesFromSpecs(t *testing.T) {
+	_, p, _, input, _ := createFixture(t)
+	// Native v0.1.5 getCreateInstanceArgs overwrites this option from extra_specs.
+	for _, option := range []string{"null", `{}`, `{"disable_updates_on_boot":false}`, `{"disable_updates_on_boot":true}`} {
+		raw := []byte(strings.TrimSuffix(string(input), "}") + `,"user_data_options":` + option + `}`)
+		if _, err := createInput(raw, p); err != nil {
+			t.Fatalf("overwritten option rejected: %s", option)
+		}
+		raw = bytes.Replace(raw, []byte(`"disable_updates":true`), []byte(`"disable_updates":false`), 1)
+		if _, err := createInput(raw, p); err == nil {
+			t.Fatal("unapproved update policy accepted")
+		}
+	}
+}
+
 func TestCreatePersistencePrecedesExecution(t *testing.T) {
 	s, _, env, input, c := createFixture(t)
 	c.before = func(context.Context, createPolicy) error {
@@ -322,8 +337,18 @@ func TestCreateNativeUsesPinnedInputsAndWaits(t *testing.T) {
 	for _, mode := range []string{"success", "exit", "cancel", "overflow"} {
 		t.Run(mode, func(t *testing.T) {
 			s, p, env, input, c := createFixture(t)
+			fifo := filepath.Join(filepath.Dir(s.native), "entered")
+			if err := unix.Mkfifo(fifo, 0600); err != nil {
+				t.Fatal(err)
+			}
+			pipe, err := os.OpenFile(fifo, os.O_RDWR|unix.O_NONBLOCK, 0600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pipe.Close()
 			script := "#!/bin/sh\n[ \"$GARM_COMMAND\" = CreateInstance ] || exit 2\n[ \"$GARM_PROVIDER_CONFIG_FILE\" = /proc/self/fd/4 ] || exit 3\n"
 			script += "IFS= read -r config < \"$GARM_PROVIDER_CONFIG_FILE\"\n[ \"$config\" = \"secret = 'never-log-this'\" ] || exit 4\n/bin/cat > /dev/null\n"
+			script += fmt.Sprintf("printf ready > '%s'\n", fifo)
 			switch mode {
 			case "success":
 				script += "printf '{\"name\":\"runner-one\",\"provider_id\":\"runner-one\",\"status\":\"running\",\"os_type\":\"linux\",\"os_arch\":\"amd64\"}'\n"
@@ -332,21 +357,59 @@ func TestCreateNativeUsesPinnedInputsAndWaits(t *testing.T) {
 			case "cancel":
 				script += "exec /bin/sleep 60\n"
 			case "overflow":
-				script += "/bin/dd if=/dev/zero bs=1048576 count=3 2>/dev/null\n"
+				script += "/bin/dd if=/dev/zero bs=1048576 count=3 2>/dev/null\nexit 0\n"
 			}
 			write(t, s.native, []byte(script), 0755)
 			p.ProviderSHA = fileSHA(t, s.native)
 			raw, _ := json.Marshal(p)
 			write(t, s.policy, raw, 0644)
-			ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
-			defer cancel()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			c.invoke = invokeCreate
-			_, out, err := s.create(ctx, env, bytes.NewReader(input), c)
+			type result struct {
+				out []byte
+				err error
+			}
+			done := make(chan result, 1)
+			finished := make(chan struct{})
+			go func() {
+				defer close(finished)
+				_, out, err := s.create(ctx, env, bytes.NewReader(input), c)
+				done <- result{out, err}
+			}()
+			defer func() { cancel(); <-finished }()
+			entered := make(chan error, 1)
+			go func() { _, err := io.ReadFull(pipe, make([]byte, 5)); entered <- err }()
+			select {
+			case err := <-entered:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-ctx.Done():
+				t.Fatal("native did not consume pinned inputs")
+			}
+			if mode == "cancel" {
+				cancel()
+			}
+			got := <-done
+			out, err := got.out, got.err
 			if mode == "success" && !bytes.Contains(out, []byte("runner-one")) {
 				t.Fatal("native output lost")
 			}
 			if (err == nil) != (mode == "success") {
 				t.Fatalf("mode=%s err=%v", mode, err)
+			}
+			if mode != "cancel" && ctx.Err() != nil {
+				t.Fatal("deadline masked the intended result")
+			}
+			var exit *exec.ExitError
+			if mode == "exit" && (!errors.As(err, &exit) || exit.ExitCode() != 9) {
+				t.Fatalf("wrong exit result: %v", err)
+			}
+			if mode == "overflow" && !errors.Is(err, errRefused) {
+				t.Fatalf("output limit not reached: %v", err)
+			}
+			if mode == "cancel" && (!errors.As(err, &exit) || ctx.Err() != context.Canceled) {
+				t.Fatalf("running native not cancelled: %v", err)
 			}
 		})
 	}

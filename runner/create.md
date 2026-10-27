@@ -14,6 +14,8 @@
 
 `extra_specs` 仅接受当前生成器拥有的 `disable_updates:true` 和 `runner_install_template`。模板是规范 Base64 字符串；按这两个固定字段的排序、紧凑 JSON 编码核对 policy 中的 `extra_specs_sha256`。字段名与值均为 ASCII，与原 Python 生成器的摘要字节一致；不引入通用 JSON 规范化协议。通过后，将原请求字节交给 native，不重新编码 bootstrap 内容。token 与完整输入只在内存中使用，不写入意图或诊断。
 
+native provider `v0.1.5` 在生成 cloud-config 前，用 `extra_specs.disable_updates` 覆盖 `UserDataOptions.DisableUpdatesOnBoot`。因此更新策略以已核验的 `extra_specs` 为准，请求中的 `user_data_options.disable_updates_on_boot` 不另设准入条件。
+
 创建前检查现有挂载、空间储备及五个依赖服务。LXD client 只读 `halo-ci` project：实例清单须为空，storage pool 仅允许镜像卷，镜像 alias 须指向固定摘要。operation 必须处于已知终态；LXD 短暂保留的已完成记录不会被误判为运行中。缺失或 null 清单、缺失状态、运行中 operation 和未知状态都拒绝。Unix socket、响应上限、取消和禁止代理／重定向沿用 watchdog 的读取边界。
 
 ## 一次执行与状态提交
