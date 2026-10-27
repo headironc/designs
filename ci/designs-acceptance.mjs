@@ -14,7 +14,14 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { unpackShared } from "./bootstrap.mjs";
 
-// A local preparation probe binds real source snapshots; final combination reuses the signed distribution.
+// Run through local-docs.ts in a disposable container. P/C are local snapshots;
+// S comes from the independently selected, unchanged distribution.
+const [bundle, lockFile] = process.argv.slice(2);
+if (!bundle || !lockFile || process.argv.length !== 4)
+  throw new Error("Expected the fixed shared bundle and lock");
+const { distribution, ...sharedSource } = JSON.parse(
+  readFileSync(lockFile, "utf8"),
+);
 const root = "/work",
   policy = path.join(root, "policy"),
   candidate = path.join(root, "candidate"),
@@ -61,10 +68,13 @@ const source = {
   lockPath: "bun.lock",
   lock: digest(path.join(policy, "bun.lock")),
 };
-const bundle = path.join(root, "shared.bundle");
-git(policy, "bundle", "create", bundle, "HEAD");
-const distribution = digest(bundle);
-unpackShared(bundle, { ...source, distribution }, shared);
+unpackShared(bundle, { ...sharedSource, distribution }, shared);
+// This concrete consumer can reuse its frozen install only for the identical lock.
+assert.equal(
+  source.lock,
+  sharedSource.lock,
+  "Prepare matching P/S dependency locks",
+);
 // Real physical copies of the already locked install. Neither source depends on an external symlink.
 cpSync("/source/node_modules", path.join(policy, "node_modules"), {
   recursive: true,
@@ -172,15 +182,16 @@ protect(toolsRoot);
 const { designsChecks, verifyDesigns } = await import(
   pathToFileURL(path.join(policy, "policy/docs.ts")).href
 );
-// This test target is deliberately synthetic; the final real repository ID is independently provided.
+// The real P checks its repository binding. The workflow path is a local label,
+// not evidence that a hosted workflow exists or ran.
 const target = {
-  repository: "fixture/designs",
-  repositoryId: "1",
+  repository: "headironc/designs",
+  repositoryId: "1434658318",
   target: "main",
-  workflow: ".github/workflows/docs.yml",
+  workflow: ".github/workflows/local-docs.yml",
 };
 const inputs = BoundInputs.verify(
-  { policy: source, shared: source, distribution },
+  { policy: source, shared: sharedSource, distribution },
   { event: "pull_request_target", base: revision, head, integration, tree },
   { policy, shared, candidate, tools },
   bundle,
