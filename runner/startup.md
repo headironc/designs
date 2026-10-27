@@ -4,7 +4,7 @@
 
 ## 启动条件
 
-入口只接受 `--check-startup`。无参数、provider 命令及 `--watchdog-check` 均拒绝。真实和有效 UID 必须匹配本机 `nucleiron` 用户，有效 GID 匹配其主组；root 调用也拒绝。本片不执行 native provider，不访问 GARM、GitHub、LXD 或 systemd API。
+正常启动入口为 `--check-startup`。无参数和 provider 命令均拒绝；同一二进制另有独立的 [watchdog 检查](guard-watchdog.md)。真实和有效 UID 必须匹配本机 `nucleiron` 用户，有效 GID 匹配其主组；root 调用也拒绝。正常启动不执行 native provider，不访问 GARM、GitHub、LXD 或 systemd API。
 
 | 输入 | 校验与含义 |
 | --- | --- |
@@ -20,6 +20,8 @@ policy 与 state 的大小上限用于限制本地输入内存。文件类型、
 
 JSON 对象拒绝重复键和大小写别名，防止有值的意图被后一个空值覆盖。`intent` 与 `latch` 只有显式 `null` 才通过。空对象、`false`、缺失字段和不支持的版本均拒绝，不修改记录解释结果。
 
+存在 `state.pending` 或 `state.new` 时拒绝，保留 watchdog 中断写入的原事务材料，不自动删除或恢复。
+
 `active` 允许显式 `null` 或有效的当前实例记录。记录包含实例名、VM UUID、正 Unix 秒时间及 `ready` 布尔值。已 ready 的记录另有正 `int64` agent ID；尚未 ready 的记录没有 agent ID。已有 active 允许 controller 正常重启，继续占用容量。本检查不宣称资源闭合，也不授权创建下一台 VM。
 
 维护标记在检查前、取得锁后和返回成功前分别核对。摘要检查核文件是否被替换及读取期间的大小、修改时间变化。返回前核状态目录、锁和状态文件仍指向原 inode。所有合法状态写者仍须持有同一永久锁；部署修改配置、文件或维护模式时先停接并使用独占维护窗口。退出后锁释放，启动检查不提供覆盖后续 controller 生命周期的锁。
@@ -28,7 +30,7 @@ JSON 对象拒绝重复键和大小写别名，防止有值的意图被后一个
 
 [30-provider-guard.conf](templates/30-provider-guard.conf) 保留原挂载依赖和 `lxd` 附加组。切换时作为 `nucleiron.service.d/30-provider-guard.conf` 的完整替换文件消费，将该文件中的 `ExecStartPre` 指向新 Go 入口。核对其他 drop-in，避免遗留启动校验重复执行；不清空其他能力拥有的启动条件。
 
-本片不修改 GARM external provider 的执行路径。这个二进制还不能接管 provider 请求或 watchdog 检查，不覆盖旧 `guarded-lxd-provider`。完整运行切换等待 Go provider 与 watchdog 所需检查接口到位；不恢复已停止的 Python 流程，也不建立 Python fallback。
+本片不修改 GARM external provider 的执行路径。这个二进制提供正常启动和 watchdog 检查，仍不能接管 provider 请求，不覆盖旧 `guarded-lxd-provider`。完整运行切换等待 Go provider 及部署验收；不恢复已停止的 Python 流程，也不建立 Python fallback。
 
 部署能力准备已有身份绑定的 policy、native 配置、guard 状态与永久锁。缺文件时启动检查失败，不自动初始化或修复状态。已有意图、latch、维护许可和未知操作保持原字节及恢复责任。旧操作由固定原恢复程序解释，不通过迁移记录或删除标记放行。
 

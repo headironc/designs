@@ -32,19 +32,9 @@ type startup struct {
 
 // CheckStartup only checks normal startup; it never invokes a provider or writes state.
 func CheckStartup(output io.Writer) int {
-	identity, err := user.Lookup("nucleiron")
+	s, err := servicePaths()
 	if err != nil {
 		return refused(output, "identity")
-	}
-	uid, uidErr := strconv.ParseUint(identity.Uid, 10, 32)
-	gid, gidErr := strconv.ParseUint(identity.Gid, 10, 32)
-	if uidErr != nil || gidErr != nil || uid == 0 || uint64(os.Getuid()) != uid || uint64(os.Geteuid()) != uid || uint64(os.Getegid()) != gid {
-		return refused(output, "identity")
-	}
-	s := startup{
-		policy: "/etc/nucleus-halo/provider-policy.json", native: "/opt/nucleus-halo/bin/garm-provider-lxd",
-		config: "/etc/nucleus-halo/garm-provider-lxd.toml", state: "/var/lib/nucleiron/provider-guard",
-		maintenance: "/run/nucleiron-records-only", serviceUID: uint32(uid),
 	}
 	stage, err := s.check()
 	if errors.Is(err, errBusy) {
@@ -57,6 +47,24 @@ func CheckStartup(output io.Writer) int {
 	return 0
 }
 
+func servicePaths() (startup, error) {
+	identity, err := user.Lookup("nucleiron")
+	if err != nil {
+		return startup{}, errRefused
+	}
+	uid, uidErr := strconv.ParseUint(identity.Uid, 10, 32)
+	gid, gidErr := strconv.ParseUint(identity.Gid, 10, 32)
+	if uidErr != nil || gidErr != nil || uid == 0 || uint64(os.Getuid()) != uid || uint64(os.Geteuid()) != uid || uint64(os.Getegid()) != gid {
+		return startup{}, errRefused
+	}
+	s := startup{
+		policy: "/etc/nucleus-halo/provider-policy.json", native: "/opt/nucleus-halo/bin/garm-provider-lxd",
+		config: "/etc/nucleus-halo/garm-provider-lxd.toml", state: "/var/lib/nucleiron/provider-guard",
+		maintenance: "/run/nucleiron-records-only", serviceUID: uint32(uid),
+	}
+	return s, nil
+}
+
 func refused(output io.Writer, stage string) int {
 	// Only fixed stage names reach the journal; file contents and errors may contain secrets.
 	fmt.Fprintf(output, "{\"event\":\"guard_startup_refused\",\"stage\":%q}\n", stage)
@@ -64,6 +72,25 @@ func refused(output io.Writer, stage string) int {
 }
 
 func (s startup) check() (string, error) {
+	return s.withState(func(g *guardFiles) error {
+		if !normalState(g.raw) {
+			return errRefused
+		}
+		return nil
+	})
+}
+
+type guardFiles struct {
+	s               startup
+	dir, lock, file *os.File
+	raw, policy     []byte
+}
+
+func (g *guardFiles) unchanged() bool {
+	return samePath(g.dir, g.s.state) && sameAt(g.lock, g.dir, "operation.lock") && sameAt(g.file, g.dir, "state.json")
+}
+
+func (s startup) withState(check func(*guardFiles) error) (string, error) {
 	if err := absent(s.maintenance); err != nil {
 		return "maintenance", err
 	}
@@ -94,6 +121,12 @@ func (s startup) check() (string, error) {
 	if err := absent(s.maintenance); err != nil {
 		return "maintenance", err
 	}
+	// An interrupted local state transaction is not a fresh health check.
+	for _, name := range []string{"state.pending", "state.new"} {
+		if err := absentAt(dir, name); err != nil {
+			return "state_transaction", err
+		}
+	}
 	raw, err := readPath(s.policy, s.rootUID, 0644, 64*1024)
 	var policy struct {
 		ProviderSHA string `json:"provider_sha256"`
@@ -109,17 +142,23 @@ func (s startup) check() (string, error) {
 	if err := checkDigest(s.config, s.rootUID, 0644, policy.ConfigSHA); err != nil {
 		return "config_digest", err
 	}
+	policyRaw := raw
 	f, err := openAt(dir, "state.json")
 	if err != nil {
 		return "state", err
 	}
-	defer f.Close()
+	g := &guardFiles{s: s, dir: dir, lock: lock, file: f, policy: policyRaw}
+	defer func() { g.file.Close() }()
 	raw, err = readFile(f, s.serviceUID, 0600, 64*1024)
-	if err != nil || !normalState(raw) {
+	if err != nil {
 		return "state", errRefused
 	}
+	g.raw = raw
+	if err := check(g); err != nil {
+		return "state", err
+	}
 	// Detect path replacement while checking pinned descriptors, before reporting admission.
-	if !samePath(dir, s.state) || !sameAt(lock, dir, "operation.lock") || !sameAt(f, dir, "state.json") {
+	if !g.unchanged() {
 		return "state_changed", errRefused
 	}
 	if err := absent(s.maintenance); err != nil {

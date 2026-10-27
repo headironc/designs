@@ -1,6 +1,6 @@
 # Runner 的 Go 结构与实施切片
 
-本设计将 runner 自有实现改为 Go，并按独立业务结果交付。[专用防火墙重载](README.md)、[guest bootstrap](bootstrap.md) 和 [provider 异常停接](watchdog.md) 已合入。本片交付 [Go guard 正常启动准入](startup.md)。本文已采用下述 Go 包，依赖随对应消费者接入。现有 Python 快照用于行为对照和原操作恢复。GARM、LXD provider、nginx、rsyslog、Squid 和 dnsproxy 保持各自职责，不重写第三方组件。
+本设计将 runner 自有实现改为 Go，并按独立业务结果交付。[专用防火墙重载](README.md)、[guest bootstrap](bootstrap.md)、[provider 异常停接](watchdog.md) 和 [Go guard 正常启动准入](startup.md) 已合入。本片交付 [guard watchdog 检查与状态持久化](guard-watchdog.md)。本文已采用下述 Go 包，依赖随对应消费者接入。现有 Python 快照用于行为对照和原操作恢复。GARM、LXD provider、nginx、rsyslog、Squid 和 dnsproxy 保持各自职责，不重写第三方组件。
 
 跨仓库边界由 [CI 架构](../ci-architecture.md#runner-与-kiln) 维护。designs 拥有 runner 自有程序及发布成品。Kiln 拥有任务镜像，消费仓库拥有工作流和业务检查。新代码在独立工作树准备，原接入现场和未知操作保全。
 
@@ -61,7 +61,7 @@ GARM 仍负责 controller 与其数据库。自有代码通过已采用 API 和�
 
 ## 已采用的 Go 包
 
-以下选型覆盖整个 runner，均为已接受的目标依赖。正常启动准入已接入 `x/sys`，其余外部包尚未接入自有 module。每个包随首个真实消费者进入独立实施片。已有实现也按表中目标迁移，不建立双版本兼容路径。
+以下选型覆盖整个 runner，均为已接受的目标依赖。正常启动已接入 `x/sys`。本片 guard watchdog 接入 LXD client 和 go-systemd 的只读单元查询；其余包随首个真实消费者进入独立实施片。已有实现也按表中目标迁移，不建立双版本兼容路径。
 
 | 包与上游 | 承担的能力与消费者 | 自有代码保留的责任 |
 | --- | --- | --- |
@@ -71,7 +71,7 @@ GARM 仍负责 controller 与其数据库。自有代码通过已采用 API 和�
 | [`github.com/cloudbase/garm-provider-common/params`](https://pkg.go.dev/github.com/cloudbase/garm-provider-common/params) | guard 消费 external provider 请求与响应；bootstrap 使用原生模板参数 | 命令白名单、必填字段、身份、容量及准入校验；协议类型不代表已经获得许可 |
 | [`github.com/canonical/lxd/client`](https://pkg.go.dev/github.com/canonical/lxd/client) | guard 和生命周期能力读取 VM、卷与原 LXD operation | 资源归属、原操作终态和释放容量条件；VM 写操作仍调用现有 native provider |
 | [`github.com/google/go-github`](https://github.com/google/go-github) 的版本化 `github` 包 | 生命周期与连接能力读取 GitHub run、job、runner 和注册状态 | run/attempt/job 对应关系、权限边界与闭合判断 |
-| [`github.com/coreos/go-systemd/v22/dbus`](https://pkg.go.dev/github.com/coreos/go-systemd/v22/dbus) | watchdog 停服、服务安装窗口及恢复校验 | 先订阅再发送、持久化原 job、分别确认 job 终态与 unit/进程/cgroup 状态 |
+| [`github.com/coreos/go-systemd/v22/dbus`](https://pkg.go.dev/github.com/coreos/go-systemd/v22/dbus) | guard 依赖单元查询；后续 watchdog 停服、服务安装窗口及恢复校验 | 只读查询校验属性类型与状态；发送变更时先订阅、持久化原 job，并分别确认 job 终态与 unit/进程/cgroup 状态 |
 | [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite)，通过 `database/sql` 使用 | records-only 恢复中读取 GARM SQLite 事实 | 原服务身份、只读连接、WAL 可见性与 schema 绑定；禁止通过直接写库制造完成状态 |
 | [`github.com/google/nftables`](https://github.com/google/nftables) | firewall 通过 netlink 构造并原子提交自有表规则 | 部署输入校验、自有表边界、规则语义、事务结果及未知发送恢复 |
 
@@ -116,7 +116,8 @@ SDK 接入保留现有超时、代理、重定向、响应上限和精确整数�
 | 专用防火墙重载（已合入） | systemd 可消费 Go 入口，检查并原子替换自有 nftables 表 | 实际入口、规则读取、nft 调用、unit 消费绑定、构建与失败测试；不改端口、域名、路由、其他表或生产服务 |
 | guest bootstrap（已合入） | 原生 provider 渲染并启动 Go guest 程序，产出相同 ready 回执 | JIT 安装、失败反馈、guest 成品与模板绑定；不启用 ScaleSet，不改 controller 凭据 |
 | provider 异常停接（已合入） | Go watchdog 消费 guard 检查接口，异常时停止准确目标的接入 | 身份核验、禁用及读回、未知请求记录、失败停止请求；不迁移 guard 或 records-only，不启用服务 |
-| Go guard 正常启动准入（本片） | controller 正常启动前核准配置、程序摘要与 guard 状态 | 标准库与 x/sys 文件保护、并发锁、intent/latch 拒绝；active 保留容量，所有维护模式启动拒绝；不含 VM 写操作和 records-only |
+| Go guard 正常启动准入（已合入） | controller 正常启动前核准配置、程序摘要与 guard 状态 | 标准库与 x/sys 文件保护、并发锁、intent/latch 拒绝；active 保留容量，所有维护模式启动拒绝；不含 VM 写操作和 records-only |
+| Go guard watchdog（本片） | 现有 Go watchdog 消费完整健康观察及持久化结果 | LXD client、systemd 状态查询、挂载与储备、ready/latch 转换、原子写入和中断拒绝；不清除旧操作，不含 VM 写操作和部署 |
 | Go guard VM 准入与写操作 | GARM 经 Go guard 执行准确绑定的 native 操作 | provider-common 协议、LXD client 核验、写前意图和失败恢复；下一次创建等待上一执行完整闭合，不仅检查 VM/卷消失 |
 | records-only 恢复启动 | controller 仅在准确维护许可与恢复条件成立时启动 | systemd 原 job、SQLite 只读事实、许可与原件核验及失败恢复；不迁用旧许可，不转换旧记录或增加 Python fallback |
 | watchdog GARM 客户端接入 | 原停接流程通过 GARM client 完成同一准确目标禁用与读回 | 保留身份、输入、时限、未知登录和禁用请求边界；不同时改造 systemd 停止恢复 |
@@ -129,18 +130,18 @@ SDK 接入保留现有超时、代理、重定向、响应上限和精确整数�
 
 每次开始后续片前，依据已经到位的消费者重新检查边界。若某一行包含两个可独立验收结果，再拆小。同一恢复不变量跨层时保留在一片，确保中间版本也能安全运行。
 
-已合入组件的具体行为与检查分别由 [firewall](README.md)、[bootstrap](bootstrap.md) 和 [watchdog](watchdog.md) 维护。已选正常启动片先完成自身准入结果，其余片再按真实依赖选择。日志采集继续消费 rsyslog 与 logrotate，不加入无消费者的 Go 日志程序。
+已合入组件的具体行为与检查分别由 [firewall](README.md)、[bootstrap](bootstrap.md)、[watchdog](watchdog.md) 和 guard 各入口文档维护。本片完成 watchdog 的状态转换及实际消费，其余片再按真实依赖选择。日志采集继续消费 rsyslog 与 logrotate，不加入无消费者的 Go 日志程序。
 
 ## 构建、验证与后续切换
 
-新自有程序使用 Go 工具链直接构建、测试。`go.mod` 与[构建说明](README.md)固定当前工具链版本及来源。正常启动准入接入首个外部依赖 `x/sys`；后续依赖按上表接入，新构建入口不依赖 Python。先联网取得并核验固定依赖，再在已准备的缓存中关闭网络下载进行构建。Linux 系统行为在独立 Linux 测试目录验证。
+新自有程序使用 Go 工具链直接构建、测试。`go.mod` 与[构建说明](README.md)固定当前工具链和依赖版本。当前已接入 `x/sys`、LXD client 与 go-systemd，其余依赖按上表接入，新构建入口不依赖 Python。先联网取得并核验固定依赖，再在已准备的缓存中关闭网络下载进行构建。Linux 系统行为在独立 Linux 测试目录验证。
 
 第三方源码归档仍使用已核版本和摘要。自有 Go module 不直接合并两份第三方 vendor 树。需要的库按实际 import 固定版本，并验证与原协议相符。发布包标注源码提交、依赖、目标平台与各成品摘要。构建记录证明来源，不代替运行许可。
 
 每片至少验证受影响的业务边界、真实 CLI 协议和失败路径，再检查差异与秘密扫描。服务、挂载、LXD 和远端 API 的替身结果只证明离线行为。真实宿主或 VM 验收单独绑定准确版本与操作。未变输入的旧检查继续复用，不为拆 PR 重复全部运行。
 
-后续切换消费本次实现合入 `main` 的准确提交。切换前先停止接入，核旧任务、unknown 操作和可回退成品。安装后核服务实际加载版本与真实任务结果。旧任务未结清时不通过更名或迁移记录强行切换。当前重构不改运行入口。
+后续切换消费本次实现合入 `main` 的准确提交。切换前先停止接入，核旧任务、unknown 操作和可回退成品。安装后核服务实际加载版本与真实任务结果。旧任务未结清时不通过更名或迁移记录强行切换。本片修改源码中的消费入口，不修改宿主已安装的程序或服务。
 
 ## 交付范围
 
-结构说明随实现保持更新，运行实现按独立业务结果交付。108 份本地历史源码及既有构建检查保全，不整体进入实现 PR。当前交付正常启动准入，其余实施片仍待选择。运行版本以稳定交付为准，不拼接修复中的文件。
+结构说明随实现保持更新，运行实现按独立业务结果交付。108 份本地历史源码及既有构建检查保全，不整体进入实现 PR。本片交付 guard watchdog 的观察、必要状态持久化及现有 watchdog 的调用切换；正常启动准入已合入，其余实施片仍待选择。运行版本以稳定交付为准，不拼接修复中的文件。
