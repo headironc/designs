@@ -114,6 +114,8 @@ node ci/local-docs.ts \
 
 排障先读输出目录的 `result.json`，核 `passed`、`cancelled`、`attached`、`container.State` 和 `error`。若没有生成 `evidence/designs-probe.json`，再读 `container.log` 定位失败阶段，不能把缺报告当作检查通过。已有报告时，检查 `report.errors` 和 `report.observations`：用 `request.name` 找到失败义务，连同启动、退出、超时、取消、结清状态及 `diagnostic` 判断。诊断文本供定位问题，不能替代 verifier 的结果；原报告可能含候选输出，按私有证据保存，不直接粘贴到公共日志。
 
+本版本监督器返回的 `diagnostic` 是含 `stdout`、`stderr` 的 JSON 字符串；监督器返回前失败时该字段可能为空。两路各保留首尾 16 KiB，超出部分标出省略字节数，不代表保留了完整日志。按报告绑定的 S 版本解释历史诊断，不能对旧报告强行套用新格式。两路累计输出超过 32 MiB 时检查失败，仍须核进程是否结清。诊断保留与输出限制由 [S 的启动合同](../ci-architecture.md#运行时启动也是可信输入)维护。
+
 [`container-acceptance.ts`](container-acceptance.ts) 验收监督器自身的行为：非 root、失败退出、超时、取消、后代结清和私有数据拒绝。该脚本仍限于一次性容器，不能在宿主直接运行。
 
 ## Hosted 上传与消费
