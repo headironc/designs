@@ -35,7 +35,8 @@ for (const scenario of [
   const source = {
     success:
       "if (process.env.GITHUB_TOKEN || process.env.NODE_OPTIONS || process.getuid() === 0) process.exit(91)",
-    failure: "process.exit(23)",
+    failure:
+      "const fs = require('node:fs'); fs.writeSync(1, 'not ok 1 - actual assertion\\n::error::candidate text\\n'); fs.writeSync(2, 'Incomplete coverage\\n'); process.exit(23)",
     timeout: "setInterval(() => {}, 1000)",
     cancel: `require('node:fs').writeFileSync(${JSON.stringify(ready)}, 'ready'); setInterval(() => {}, 1000)`,
     descendant:
@@ -69,7 +70,14 @@ for (const scenario of [
   assert.equal(result.error, null);
   if (scenario === "success" || scenario === "descendant")
     assert.equal(result.status, 0);
-  if (scenario === "failure") assert.equal(result.status, 23);
+  if (scenario === "failure") {
+    assert.equal(result.status, 23);
+    assert.equal(
+      result.stdout,
+      "not ok 1 - actual assertion\n::error::candidate text\n",
+    );
+    assert.equal(result.stderr, "Incomplete coverage\n");
+  }
   if (scenario === "timeout") {
     assert.equal(result.timedOut, true);
     assert.equal(result.signal, "SIGKILL");
@@ -80,6 +88,48 @@ for (const scenario of [
   }
   noCandidateProcesses(identity.uid);
   results.push({ scenario, result });
+}
+for (const scenario of ["bounded-output", "output-limit"] as const) {
+  const source =
+    scenario === "bounded-output"
+      ? "const fs = require('node:fs'); for (const fd of [1, 2]) { fs.writeSync(fd, 'first assertion\\n'); fs.writeSync(fd, 'x'.repeat(65536)); fs.writeSync(fd, '\\nlast summary'); } process.exit(17)"
+      : "const fs = require('node:fs'); for (let i = 0; i < 600; i++) fs.writeSync(1, Buffer.alloc(65536, 120)); setInterval(() => {}, 1000)";
+  const result = await runIsolated(
+    "local-container",
+    identity,
+    { argv: [node, "-e", source], cwd: root, env: {} },
+    environment,
+    5000,
+    new AbortController().signal,
+  );
+  assert.equal(result.started, true);
+  assert.equal(result.settled, true);
+  assert.equal(result.timedOut, false);
+  if (scenario === "bounded-output") {
+    assert.equal(result.status, 17);
+    assert.equal(result.error, null);
+    for (const text of [result.stdout, result.stderr]) {
+      assert.equal(
+        text,
+        "first assertion\n" +
+          "x".repeat(16368) +
+          "\n[32797 output bytes omitted]\n" +
+          "x".repeat(16371) +
+          "\nlast summary",
+      );
+    }
+  } else {
+    assert.match(result.error!, /output exceeded 32 MiB/);
+    assert.equal(result.signal, "SIGKILL");
+    assert.ok(Buffer.byteLength(result.stdout) < 33000);
+  }
+  noCandidateProcesses(identity.uid);
+  results.push({
+    scenario,
+    status: result.status,
+    settled: result.settled,
+    error: result.error,
+  });
 }
 const forbidden = path.join(root, "root-owned");
 mkdirSync(forbidden, { mode: 0o700 });

@@ -53,6 +53,7 @@ for (const scenario of [
   "query-before",
   "query-after",
   "kill-error",
+  "split-output",
 ])
   test(`original identity settlement remains explicit: ${scenario}`, () => {
     const result = spawnSync(
