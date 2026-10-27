@@ -4,7 +4,7 @@
 
 已交付异常停接程序、service 和 timer 模板。[Go guard watchdog](guard-watchdog.md) 提供本入口消费的 `--watchdog-check`，包含必要的 guard 状态持久化；[正常启动准入](startup.md)为另一入口。VM 写操作与 records-only 恢复分别交付。当前只构建和离线验证，不安装模板、不启动 timer，不恢复已停止的 Python 流程。完整 Go 运行版本仍依赖后续 provider 实现及实际部署验收。
 
-以下描述已合入的 HTTP 与 systemctl 实现。[Go 包选型](architecture.md#已采用的-go-包)已确定接入 GARM client 与 go-systemd。两个改造分别交付，保留准确目标和未知请求语义；本文的 CLI 停止请求尚不具有 D-Bus job 恢复能力。
+本片通过固定为 v0.2.1 的 GARM client 发出登录、controller 身份查询、repository ScaleSet 列表、准确 ID 查询及禁用请求，替换手写 HTTP 调用。写前记录和恢复仍由 watchdog 持有，SDK 不负责重试或决定原请求是否完成。[go-systemd 停止改造](architecture.md#已采用的-go-包)另片交付；当前 CLI 停止请求尚不具有 D-Bus job 恢复能力。
 
 ## 目标与调用
 
@@ -12,7 +12,7 @@
 
 程序从 root 所有、单硬链接的普通文件读取配置。`/etc/nucleus-halo/provider-policy.json` 的模式为 `0644`，`/etc/nucleus-halo/admin-password` 为 `0600`。符号链接、FIFO、目录、错误权限和超限输入均拒绝。policy 继续由部署能力生成，watchdog 只消费 `controller_id`、`repository_id`、`scaleset_name`；其余字段仍由 guard 解释。标识符必须有效且显式提供，没有历史 repository 默认值。
 
-GARM API 固定为 `http://127.0.0.1:9997/api/v1`，禁用代理和重定向。使用现有 `haloadmin` 登录接口，随后核对 controller 身份。列表中只选取名称匹配的唯一 ScaleSet。repository 和 provider `halo-lxd` 必须匹配。发送前再次读取准确 ID，并验证全部身份。GARM v0.2.1 的 `enabled` 使用 `omitempty`，缺省表示禁用；显式 `null` 或错误类型仍拒绝。只有已启用的目标才收到一次 `PUT {"enabled":false}`。读回准确目标为禁用后，才报告 `disabled`。合法空列表报告 `no-scaleset`，缺失、`null` 或损坏列表是失败。
+GARM API 固定为 `http://127.0.0.1:9997/api/v1`，禁用代理和重定向，并关闭 SDK 的请求调试输出。使用现有 `haloadmin` 登录接口，随后核对 controller 身份。列表中只选取名称匹配的唯一 ScaleSet。repository 和 provider `halo-lxd` 必须匹配。发送前再次读取准确 ID，并验证全部身份。GARM v0.2.1 的 `enabled` 使用 `omitempty`，缺省表示禁用；响应 consumer 在 SDK 解码前拒绝显式 `null` 或错误类型。只有已启用的目标才收到一次禁用 PUT：`Enabled` 指针明确提供 `false`；SDK 同时编码的 `enable_shell`、`state`、`extended_state` 为 `null`，按 v0.2.1 更新逻辑均不变更。成功响应为 HTTP 200 和 ScaleSet JSON，随后仍独立读回准确目标为禁用，才报告 `disabled`。合法空列表报告 `no-scaleset`，缺失、`null` 或损坏列表是失败。
 
 每次请求最长 15 秒，响应上限为 2 MiB。ID 使用 `int64` 精确解析，并受 GARM 路由的正 `uint32` 范围约束。整个观察流程最长 125 秒；失败停服务另有 15 秒额度。service 的 170 秒上限为退出和清理留出余量。
 
@@ -41,7 +41,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
   -o .build/provider-watchdog ./cmd/provider-watchdog
 ```
 
-测试使用本地 HTTP server、临时受保护文件和受控子进程。覆盖正常与忙碌检查、准确目标、空列表、身份变化、并发锁、精确大整数 ID、登录及 PUT 回执丢失、原目标只读恢复、文件保护、取消和脱敏。不会连接实际 GARM、LXD 或 systemd。实际 CLI 的无权限和非法参数检查也不调用宿主服务。
+测试让真实 SDK 连接本地 HTTP server，配合临时受保护文件和受控子进程。覆盖实际路径与请求体、服务端接收时写前记录已落盘、正常与忙碌检查、准确目标、空列表、身份变化、并发锁、精确大整数 ID、登录及 PUT 回执丢失、损坏响应保留未结记录、原目标只读恢复、文件保护、取消且不重发和脱敏。不会连接实际 GARM、LXD 或 systemd。实际 CLI 的无权限和非法参数检查也不调用宿主服务。
 
 [service](templates/nucleiron-provider-watchdog.service) 沿用原 guard 所需的 `/var/lib/nucleiron` 写权限；watchdog 自己只写专用目录。原 [timer](templates/nucleiron-provider-watchdog.timer) 的启动及间隔保持。模板消费路径为 `/opt/nucleus-halo/bin/provider-watchdog`。部署时仍需核准确 guard、policy、controller、旧操作与成品；离线通过不证明真实停接。
 

@@ -46,8 +46,7 @@ func setup(t *testing.T) *fixture {
 	}
 	server := httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(server.Close)
-	f.o.api = newController()
-	f.o.api.endpoint = server.URL
+	f.o.api = newController(server.Listener.Addr().String())
 	t.Cleanup(f.o.api.client.CloseIdleConnections)
 	return f
 }
@@ -55,6 +54,12 @@ func setup(t *testing.T) *fixture {
 func (f *fixture) serve(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if !strings.HasPrefix(r.URL.Path, "/api/v1/") {
+		http.Error(w, "unexpected API base", 400)
+		return
+	}
+	r.URL.Path = strings.TrimPrefix(r.URL.Path, "/api/v1")
+	w.Header().Set("Content-Type", "application/json")
 	f.requests = append(f.requests, r.Method+" "+r.URL.Path)
 	if r.URL.Path != "/auth/login" && r.Header.Get("Authorization") != "Bearer synthetic-session" {
 		http.Error(w, "credential mismatch", 401)
@@ -83,6 +88,10 @@ func (f *fixture) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		if f.mode == "oversize" {
 			fmt.Fprint(w, strings.Repeat("x", 2*1024*1024+1))
+			return
+		}
+		if f.mode == "login-trailing" {
+			fmt.Fprint(w, `{"token":"synthetic-session"} {}`)
 			return
 		}
 		fmt.Fprint(w, `{"token":"synthetic-session"}`)
@@ -116,6 +125,9 @@ func (f *fixture) serve(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(w, `[]`)
 		case "null-list":
 			fmt.Fprint(w, `null`)
+		case "null-list-enabled":
+			item["enabled"] = nil
+			_ = json.NewEncoder(w).Encode([]any{item})
 		case "duplicate":
 			_ = json.NewEncoder(w).Encode([]any{item, item})
 		default:
@@ -135,7 +147,9 @@ func (f *fixture) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		body, _ := io.ReadAll(r.Body)
-		if string(body) != `{"enabled":false}` {
+		// GARM treats the SDK's optional null pointer fields as unchanged.
+		var mutation map[string]any
+		if json.Unmarshal(body, &mutation) != nil || len(mutation) != 4 || mutation["enabled"] != false || mutation["enable_shell"] != nil || mutation["state"] != nil || mutation["extended_state"] != nil {
 			http.Error(w, "unexpected mutation", 400)
 			return
 		}
@@ -151,7 +165,12 @@ func (f *fixture) serve(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "private server detail", 500)
 			return
 		}
-		w.WriteHeader(204)
+		if f.mode == "put-invalid-reply" {
+			fmt.Fprint(w, `{`)
+			return
+		}
+		item["enabled"] = f.enabled
+		_ = json.NewEncoder(w).Encode(item)
 		return
 	}
 	if f.mode == "provider-drift" {
@@ -217,7 +236,7 @@ func TestBoundDisableAndIdleChecks(t *testing.T) {
 }
 
 func TestFailuresDoNotModifyAnotherTargetOrRepeatWrites(t *testing.T) {
-	for _, mode := range []string{"none", "null-list", "duplicate", "wrong-controller", "wrong-repository", "provider-drift", "missing-enabled", "null-enabled", "fractional-id", "overflow-id", "put-lost", "put-rejected", "still-enabled", "readback-drift", "login-lost", "oversize", "redirect"} {
+	for _, mode := range []string{"none", "null-list", "null-list-enabled", "duplicate", "wrong-controller", "wrong-repository", "provider-drift", "missing-enabled", "null-enabled", "fractional-id", "overflow-id", "put-lost", "put-rejected", "put-invalid-reply", "still-enabled", "readback-drift", "login-lost", "login-trailing", "oversize", "redirect"} {
 		t.Run(mode, func(t *testing.T) {
 			f := setup(t)
 			f.mode = mode
@@ -232,11 +251,16 @@ func TestFailuresDoNotModifyAnotherTargetOrRepeatWrites(t *testing.T) {
 				t.Fatalf("exit=%d stops=%d log=%s", got, f.stops, f.log.String())
 			}
 			wantPuts := 0
-			if mode == "put-lost" || mode == "put-rejected" || mode == "still-enabled" || mode == "readback-drift" {
+			if mode == "put-lost" || mode == "put-rejected" || mode == "put-invalid-reply" || mode == "still-enabled" || mode == "readback-drift" {
 				wantPuts = 1
 			}
 			if f.puts != wantPuts {
 				t.Fatalf("puts=%d", f.puts)
+			}
+			data, err := os.ReadFile(filepath.Join(f.o.dir, "state.json"))
+			var pending receipt
+			if err != nil || json.Unmarshal(data, &pending) != nil || (wantPuts == 1 && pending.DisablePending != 4294967295) {
+				t.Fatalf("lost pending write: %s, %v", data, err)
 			}
 			requests := len(f.requests)
 			if got := f.run(context.Background()); got != 1 || len(f.requests) != requests || f.stops != 1 {

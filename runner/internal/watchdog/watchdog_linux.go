@@ -52,7 +52,7 @@ func Run(ctx context.Context, output io.Writer) int {
 		fmt.Fprintln(output, `{"event":"watchdog_failed","stage":"root_identity"}`)
 		return 1
 	}
-	api := newController()
+	api := newController("127.0.0.1:9997")
 	defer api.client.CloseIdleConnections()
 	o := observer{
 		dir: "/var/lib/nucleiron-watchdog", policy: "/etc/nucleus-halo/provider-policy.json",
