@@ -2,7 +2,7 @@
 
 `provider-watchdog` 供专用 root oneshot 服务消费。它调用现有 guard 的 `--watchdog-check` 接口。返回 `0` 表示本次正常，`75` 表示 guard 正忙；没有未结请求时，两者均直接结束。其他退出、启动失败或超时进入停接流程。Go 入口不改写 guard 状态，也不承担正常 provider 准入或 records-only 启动校验。
 
-本片已交付异常停接程序、service 和 timer 模板。Go guard 正常启动准入已选为下一片，VM 写操作与 records-only 恢复分别交付。当前只构建和离线验证，不安装模板、不启动 timer，不恢复已停止的 Python 流程。完整 Go 运行版本仍依赖后续 guard 实现及实际部署验收。
+本片已交付异常停接程序、service 和 timer 模板。[Go guard 正常启动准入](startup.md)单独交付，尚不提供本 watchdog 消费的 `--watchdog-check`。VM 写操作与 records-only 恢复分别交付。当前只构建和离线验证，不安装模板、不启动 timer，不恢复已停止的 Python 流程。完整 Go 运行版本仍依赖后续 guard 实现及实际部署验收。
 
 以下描述已合入的 HTTP 与 systemctl 实现。[Go 包选型](architecture.md#已采用的-go-包)已确定接入 GARM client 与 go-systemd。两个改造分别交付，保留准确目标和未知请求语义；本文的 CLI 停止请求尚不具有 D-Bus job 恢复能力。
 

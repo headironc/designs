@@ -1,6 +1,6 @@
 # Runner Go 实现
 
-已交付专用防火墙重载、[guest bootstrap](bootstrap.md) 和 [provider 异常停接](watchdog.md)。下一实现片为 Go guard 正常启动准入。已采用的 Go 包及后续接入边界见 [架构选型](architecture.md#已采用的-go-包)。以下描述当前已合入的 firewall；目标 nftables 包实现尚未接入。
+已交付专用防火墙重载、[guest bootstrap](bootstrap.md) 和 [provider 异常停接](watchdog.md)。本片交付 [Go guard 正常启动准入](startup.md)。已采用的 Go 包及后续接入边界见 [架构选型](architecture.md#已采用的-go-包)。以下描述当前已合入的 firewall；目标 nftables 包实现尚未接入。
 
 `runner-firewall` 供 `nucleiron-firewall.service` 的启动与重载使用。它用 `/usr/sbin/nft` 列出现有表，读取 `/etc/nucleiron-gateway/isolated-network.nft`，检查后应用同一份规则字节。
 
@@ -8,9 +8,18 @@
 
 ## 构建与检查
 
-当前自有 module 只依赖 Go 标准库，目标依赖随对应实施片加入 `go.mod` 和 `go.sum`。Linux amd64 构建固定使用 [Go 1.27.3](https://go.dev/dl/)，即本片核定时的最新稳定版。官方工具链归档 SHA256 为 `65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40`。先下载并验证工具链，再运行检查。引入外部包的实施片同时提供固定依赖的下载、校验与缓存准备步骤；下列检查命令保持离线。
+当前自有 module 使用标准库和 `golang.org/x/sys v0.49.0`，其余目标依赖随对应实施片接入。Linux amd64 构建固定使用 [Go 1.27.3](https://go.dev/dl/)，即本片核定时的最新稳定版。官方工具链归档 SHA256 为 `65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40`。先下载并验证工具链，再准备 `go.mod` / `go.sum` 固定的依赖。
 
-在本目录运行：
+首次在本目录联网准备缓存，使用 Go 官方模块代理与校验数据库：
+
+```sh
+export GOTOOLCHAIN=local GOWORK=off
+export GOCACHE="$PWD/.build/go-cache" GOMODCACHE="$PWD/.build/go-mod"
+GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org go mod download
+go mod verify
+```
+
+随后在本目录离线运行：
 
 ```sh
 export GOTOOLCHAIN=local GOWORK=off GOPROXY=off GOSUMDB=off
