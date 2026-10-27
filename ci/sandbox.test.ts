@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { isolatedArguments, requireSupervisor } from "./sandbox.ts";
+import { isolatedArguments } from "./sandbox.ts";
 
 test("the actual env boundary strips inherited secrets and startup code", (t) => {
   const root = mkdtempSync(path.join(os.tmpdir(), "designs-env-"));
@@ -38,13 +38,13 @@ test("the actual env boundary strips inherited secrets and startup code", (t) =>
   assert.equal(existsSync(marker), false);
 });
 
-test("persistent development cannot enter either privileged supervision mode", () => {
-  if (process.getuid?.() === 0) return;
-  assert.throws(() => requireSupervisor("github-hosted"), /disposable hosted/);
-  assert.throws(
-    () => requireSupervisor("local-container"),
-    /disposable Docker/,
+test("supervisor guards enforce every prerequisite in controlled process contexts", () => {
+  const result = spawnSync(
+    process.execPath,
+    [path.join(import.meta.dirname, "supervisor-fixture.mjs")],
+    { encoding: "utf8", timeout: 10_000 },
   );
+  assert.equal(result.status, 0, result.stderr);
 });
 
 for (const scenario of [

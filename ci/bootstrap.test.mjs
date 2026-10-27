@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -107,8 +108,39 @@ test("native bundle rejects substitution, missing lock, wrong version, extra ref
       ),
     /exactly/,
   );
+  git("rm", "bun.lock");
+  git(
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "commit",
+    "--quiet",
+    "--no-gpg-sign",
+    "-m",
+    "missing lock",
+  );
+  const lockless = path.join(root, "lockless.bundle");
+  git("bundle", "create", lockless, "HEAD");
+  const missing = path.join(root, "missing-lock");
+  assert.throws(
+    () =>
+      unpackShared(
+        lockless,
+        {
+          ...expected,
+          commit: git("rev-parse", "HEAD"),
+          tree: git("rev-parse", "HEAD^{tree}"),
+          distribution: digest(lockless),
+        },
+        missing,
+      ),
+    { code: "ENOENT" },
+  );
+  assert.equal(existsSync(missing), false);
+  writeFileSync(path.join(source, "bun.lock"), '{"lockfileVersion":1}\n');
   symlinkSync("/etc/passwd", path.join(source, "escape"));
-  git("add", "escape");
+  git("add", "bun.lock", "escape");
   git(
     "-c",
     "user.name=Fixture",
