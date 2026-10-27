@@ -16,9 +16,11 @@ import {
   type SourcePin,
 } from "./contract.ts";
 import {
+  canonicalDigest,
   listSourcePaths,
   readSourceIdentity,
   sourceGitEnvironment,
+  type SourceIdentity,
 } from "./source.ts";
 import { HostedReport } from "./artifact.ts";
 
@@ -197,13 +199,17 @@ export class BoundInputs {
         "Local candidate does not match the authenticated execution",
       );
     const actual = readSourceIdentity(root, listSourcePaths(root));
-    const normalized = actual.entries.map((entry) => ({
-      ...entry,
-      mode: entry.mode & 0o111 ? 0o755 : 0o644,
-    }));
+    // Source preparation and protection can change read/write bits on either snapshot.
+    // Preserve Git's executable distinction while comparing both sides symmetrically.
+    const normalize = (entries: SourceIdentity["entries"]) =>
+      entries.map((entry) => ({
+        ...entry,
+        mode: entry.mode & 0o111 ? 0o755 : 0o644,
+      }));
     if (
       actual.baseline !== this.source.baseline ||
-      JSON.stringify(normalized) !== JSON.stringify(this.source.entries)
+      canonicalDigest(normalize(actual.entries)) !==
+        canonicalDigest(normalize(this.source.entries))
     )
       throw new Error(
         "Local candidate source differs from authenticated source members",
