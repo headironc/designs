@@ -9,6 +9,16 @@ import (
 	"time"
 )
 
+type countedTransport struct {
+	*http.Transport
+	attempts atomic.Int32
+}
+
+func (t *countedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	t.attempts.Add(1)
+	return t.Transport.RoundTrip(r)
+}
+
 func TestSDKWriteCancellationDoesNotRetry(t *testing.T) {
 	for _, method := range []string{"login", "disable"} {
 		t.Run(method, func(t *testing.T) {
@@ -23,6 +33,8 @@ func TestSDKWriteCancellationDoesNotRetry(t *testing.T) {
 			defer server.Close()
 			defer close(release)
 			api := newController(server.Listener.Addr().String())
+			transport := &countedTransport{Transport: api.client.Transport.(*http.Transport)}
+			api.client.Transport = transport
 			defer api.client.CloseIdleConnections()
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -43,8 +55,8 @@ func TestSDKWriteCancellationDoesNotRetry(t *testing.T) {
 			cancel()
 			select {
 			case err := <-done:
-				if err != errRefused || requests.Load() != 1 {
-					t.Fatalf("err=%v requests=%d", err, requests.Load())
+				if err != errRefused || requests.Load() != 1 || transport.attempts.Load() != 1 {
+					t.Fatalf("err=%v requests=%d attempts=%d", err, requests.Load(), transport.attempts.Load())
 				}
 			case <-time.After(3 * time.Second):
 				t.Fatal("SDK ignored request cancellation")
