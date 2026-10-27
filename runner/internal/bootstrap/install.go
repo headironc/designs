@@ -155,11 +155,7 @@ func (i *installer) install(ctx context.Context) error {
 	if err := i.status(ctx, "idle", "Runner service started", agentID); err != nil {
 		return fail(true)
 	}
-	host, err := os.Hostname()
-	if err != nil {
-		return fail(true)
-	}
-	ready, err := json.Marshal(map[string]any{"instance": host, "agent_id": agentID})
+	ready, err := json.Marshal(map[string]any{"instance": i.config.instance, "agent_id": agentID})
 	if err != nil || publishReady(i.home, ready) != nil {
 		return fail(true)
 	}

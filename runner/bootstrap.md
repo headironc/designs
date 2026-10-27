@@ -12,7 +12,7 @@
 
 程序从原网关取回 unit，以原 sudo install 命令安装。它保留代理 drop-in、`runsvc.sh` 复制、`env.sh`、daemon-reload、enable 与 start 的顺序。unit 是受信任的 provider 输入，不接受 guest 工作流提供的 unit。每条子命令限时 30 秒，输出不进入诊断。
 
-服务启动成功后，程序提交 system-info 和 idle 回调。两次回调成功后才发布 `.nucleiron-bootstrap-ready`，内容仍为 `instance` 与 `agent_id`。回执先完整写入并同步，再以不覆盖的方式发布。成功事件为 `bootstrap_complete`。
+服务启动成功后，程序提交 system-info 和 idle 回调。两次回调成功后才发布 `.nucleiron-bootstrap-ready`，内容仍为 `instance` 与 `agent_id`。`instance` 使用模板传入的原生 `RunnerName`，缺失时拒绝配置。它必须与 provider 实例名保持一致，不以 guest hostname 代替。回执先完整写入并同步，再以不覆盖的方式发布。成功事件为 `bootstrap_complete`。
 
 ## 失败与恢复
 

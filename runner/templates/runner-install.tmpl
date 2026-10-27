@@ -8,6 +8,7 @@ exec /usr/local/bin/runner-bootstrap <<'NUCLEIRON_BOOTSTRAP_INPUT'
   "metadata_url": {{ printf "%q" .MetadataURL }},
   "callback_url": {{ printf "%q" .CallbackURL }},
   "callback_token": {{ printf "%q" .CallbackToken }},
+  "runner_name": {{ printf "%q" .RunnerName }},
   "use_jit": {{ .UseJITConfig }}
 }
 NUCLEIRON_BOOTSTRAP_INPUT

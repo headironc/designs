@@ -17,9 +17,9 @@ func TestRenderedTemplateKeepsIdentityOutOfShellEvaluationAndTrace(t *testing.T)
 	}
 	// These are the fields available on the native InstallRunnerParams consumer.
 	params := struct {
-		MetadataURL, CallbackURL, CallbackToken string
-		UseJITConfig                            bool
-	}{metadataEndpoint, callbackEndpoint, "$(id)`id`\"$HOME\"", true}
+		MetadataURL, CallbackURL, CallbackToken, RunnerName string
+		UseJITConfig                                        bool
+	}{metadataEndpoint, callbackEndpoint, "$(id)`id`\"$HOME\"", testInstance, true}
 	tmpl, err := template.New("install").Option("missingkey=error").Parse(string(source))
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +50,7 @@ func TestRenderedTemplateKeepsIdentityOutOfShellEvaluationAndTrace(t *testing.T)
 		t.Fatal(err)
 	}
 	config, err := Decode(bytes.NewReader(raw))
-	if err != nil || config.token != params.CallbackToken {
+	if err != nil || config.token != params.CallbackToken || config.instance != params.RunnerName {
 		t.Fatal("shell changed the instance identity")
 	}
 }

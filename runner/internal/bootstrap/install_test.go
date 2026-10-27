@@ -20,9 +20,10 @@ import (
 )
 
 const testToken = "synthetic-instance-token-never-log"
+const testInstance = "nucleiron-provider-instance"
 
 func input(token string) string {
-	raw, _ := json.Marshal(map[string]any{"metadata_url": metadataEndpoint, "callback_url": callbackEndpoint, "callback_token": token, "use_jit": true})
+	raw, _ := json.Marshal(map[string]any{"metadata_url": metadataEndpoint, "callback_url": callbackEndpoint, "callback_token": token, "runner_name": testInstance, "use_jit": true})
 	return string(raw)
 }
 
@@ -33,6 +34,8 @@ func TestDecodeRejectsUntrustedConfiguration(t *testing.T) {
 		strings.Replace(input(testToken), callbackEndpoint, "http://untrusted.invalid", 1),
 		strings.Replace(input(testToken), `"use_jit":true`, `"use_jit":false`, 1),
 		strings.Replace(input(testToken), `"use_jit":true`, `"unknown":true`, 1),
+		strings.Replace(input(testToken), testInstance, "", 1),
+		strings.Replace(input(testToken), `"runner_name":"`+testInstance+`",`, "", 1),
 		input(testToken) + `{}`, strings.Repeat("x", responseLimit+1),
 	} {
 		if _, err := Decode(strings.NewReader(raw)); err == nil || strings.Contains(err.Error(), testToken) {
@@ -160,6 +163,15 @@ func fixture(t *testing.T, failure string) *scenario {
 
 func TestInstallJITIdentityAndReportReady(t *testing.T) {
 	s := fixture(t, "")
+	host, err := os.Hostname()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantInstance := host + "-provider-instance"
+	s.i.config, err = Decode(strings.NewReader(strings.Replace(input(testToken), testInstance, wantInstance, 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(s.i.home, "runsvc.sh"), []byte("old image helper"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -180,8 +192,7 @@ func TestInstallJITIdentityAndReportReady(t *testing.T) {
 		Instance string `json:"instance"`
 		AgentID  int64  `json:"agent_id"`
 	}
-	host, _ := os.Hostname()
-	if json.Unmarshal(ready, &receipt) != nil || receipt.Instance != host || receipt.AgentID != 9007199254740993 {
+	if json.Unmarshal(ready, &receipt) != nil || receipt.Instance != wantInstance || receipt.AgentID != 9007199254740993 {
 		t.Fatalf("ready receipt changed identity: %s", ready)
 	}
 	if len(s.commands) != 7 || !reflect.DeepEqual(s.commands[6], []string{"sudo", "-n", "systemctl", "start", "actions.runner.nucleus.fixture.service"}) {

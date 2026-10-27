@@ -16,7 +16,8 @@ const (
 
 // Config can only be constructed by validating the provider's rendered input.
 type Config struct {
-	token string
+	token    string
+	instance string
 }
 
 // Decode reads the private stdin input produced by runner-install.tmpl.
@@ -26,6 +27,7 @@ func Decode(input io.Reader) (Config, error) {
 		MetadataURL   string `json:"metadata_url"`
 		CallbackURL   string `json:"callback_url"`
 		CallbackToken string `json:"callback_token"`
+		RunnerName    string `json:"runner_name"`
 		UseJIT        bool   `json:"use_jit"`
 	}
 	raw, err := io.ReadAll(io.LimitReader(input, responseLimit+1))
@@ -40,7 +42,7 @@ func Decode(input io.Reader) (Config, error) {
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		return Config{}, errors.New("invalid bootstrap input")
 	}
-	if !wire.UseJIT || strings.TrimRight(wire.MetadataURL, "/") != metadataEndpoint || strings.TrimRight(wire.CallbackURL, "/") != callbackEndpoint || wire.CallbackToken == "" {
+	if !wire.UseJIT || strings.TrimRight(wire.MetadataURL, "/") != metadataEndpoint || strings.TrimRight(wire.CallbackURL, "/") != callbackEndpoint || wire.CallbackToken == "" || strings.TrimSpace(wire.RunnerName) == "" {
 		return Config{}, errors.New("invalid bootstrap configuration")
 	}
 	for _, ch := range wire.CallbackToken {
@@ -48,5 +50,5 @@ func Decode(input io.Reader) (Config, error) {
 			return Config{}, errors.New("invalid bootstrap configuration")
 		}
 	}
-	return Config{token: wire.CallbackToken}, nil
+	return Config{token: wire.CallbackToken, instance: wire.RunnerName}, nil
 }
