@@ -25,7 +25,7 @@ const createSpecs = `{"disable_updates":true,"runner_install_template":"aGVsbG8K
 func createFixture(t *testing.T) (startup, createPolicy, map[string]string, []byte, creator) {
 	t.Helper()
 	s := fixture(t)
-	p := createPolicy{Controller: controllerID, Pool: poolID, Image: strings.Repeat("a", 64), Alias: "runner-image", Specs: fmt.Sprintf("%x", sha256.Sum256([]byte(createSpecs))), ProviderSHA: fileSHA(t, s.native), ConfigSHA: fileSHA(t, s.config)}
+	p := createPolicy{guardPolicy: guardPolicy{Controller: controllerID, Repository: repositoryID, ScaleSet: "nucleiron-halo", Pool: poolID, Image: strings.Repeat("a", 64)}, Alias: "runner-image", Specs: fmt.Sprintf("%x", sha256.Sum256([]byte(createSpecs))), ProviderSHA: fileSHA(t, s.native), ConfigSHA: fileSHA(t, s.config)}
 	raw, _ := json.Marshal(p)
 	write(t, s.policy, raw, 0644)
 	env := map[string]string{"GARM_COMMAND": "CreateInstance", "GARM_CONTROLLER_ID": p.Controller, "GARM_POOL_ID": p.Pool, "GARM_PROVIDER_CONFIG_FILE": s.config, "GARM_INTERFACE_VERSION": "v0.1.0"}

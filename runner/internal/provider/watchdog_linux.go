@@ -31,12 +31,6 @@ type latch struct {
 	OperationFailure string      `json:"operation_failure,omitempty"`
 }
 
-type guardPolicy struct {
-	Controller string `json:"controller_id"`
-	Pool       string `json:"pool_id"`
-	Image      string `json:"image_fingerprint"`
-}
-
 type health struct {
 	capacity func(context.Context) error
 	ready    func(context.Context, guardPolicy, activeInstance) (*int64, error)
@@ -75,7 +69,7 @@ func CheckWatchdog(ctx context.Context, output io.Writer) int {
 func (s startup) watchdog(ctx context.Context, h health) (string, error) {
 	return s.withState(func(g *guardFiles) error {
 		var p guardPolicy
-		if decodeObject(g.policy, &p, true) != nil || !uuid.MatchString(p.Controller) || !uuid.MatchString(p.Pool) || !digest.MatchString(p.Image) {
+		if decodeObject(g.policy, &p, true) != nil || !p.valid() {
 			return errRefused
 		}
 		var state guardState
