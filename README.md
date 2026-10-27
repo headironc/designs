@@ -4,7 +4,8 @@
 
 ## 当前设计
 
-- [CI、审查、准入与运行体系](ci-architecture.md)：完整设计仍有待收敛项；已选首片是 agents 一个普通 PR 的可信准入、合规 squash、原操作恢复及必要清理。
+- [CI、审查、准入与运行体系](ci-architecture.md)：完整设计仍有待收敛项。当前并行实施 agents 普通 PR 首片、Nucleus 普通 PR 到 dev 门禁及 runner 首次连接；各片独立验收。
+- [Rust 与 Halo 共用 runner](ci-architecture.md#runner-与-kiln)：共用基础设施、两层镜像、不可信池边界、生命周期、缓存和接入验收；文档收录不表示已部署。
 
 ## 设计与实施
 
