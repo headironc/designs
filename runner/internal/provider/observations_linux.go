@@ -130,6 +130,9 @@ func (r *lxdReads) RoundTrip(req *http.Request) (*http.Response, error) {
 	if file && response.Header.Get("X-LXD-type") != "file" {
 		return nil, fault{"Bootstrap completion record invalid", true}
 	}
+	if !validInventory(req.URL.Path, raw) {
+		return nil, errRefused
+	}
 	response.Body = io.NopCloser(bytes.NewReader(raw))
 	return response, nil
 }
@@ -139,6 +142,16 @@ func observeReady(ctx context.Context, policy guardPolicy, active activeInstance
 }
 
 func lxdReady(ctx context.Context, socket string, policy guardPolicy, active activeInstance) (*int64, error) {
+	var agent *int64
+	err := withLXD(ctx, socket, func(client lxd.InstanceServer) error {
+		var err error
+		agent, err = readReady(client, policy, active)
+		return err
+	})
+	return agent, err
+}
+
+func withLXD(ctx context.Context, socket string, observe func(lxd.InstanceServer) error) error {
 	client, err := lxd.ConnectLXDUnixWithContext(ctx, socket, &lxd.ConnectionArgs{
 		HTTPClient: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return errRefused }},
 		TransportWrapper: func(t *http.Transport) lxd.HTTPTransporter {
@@ -152,18 +165,21 @@ func lxdReady(ctx context.Context, socket string, policy guardPolicy, active act
 		},
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer client.Disconnect()
 	httpClient, err := client.GetHTTPClient()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer httpClient.CloseIdleConnections()
 	if !client.HasExtension("virtual-machines") {
-		return nil, errRefused
+		return errRefused
 	}
-	client = client.UseProject("halo-ci")
+	return observe(client.UseProject("halo-ci"))
+}
+
+func readReady(client lxd.InstanceServer, policy guardPolicy, active activeInstance) (*int64, error) {
 	item, _, err := client.GetInstance(active.Name)
 	if err != nil {
 		return nil, err
