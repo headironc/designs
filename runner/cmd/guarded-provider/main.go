@@ -23,6 +23,10 @@ func main() {
 		if environment["GARM_COMMAND"] == "DeleteInstance" {
 			os.Exit(provider.Delete(ctx, environment, os.Stderr))
 		}
+		switch environment["GARM_COMMAND"] {
+		case "GetVersion", "GetInstance", "ListInstances":
+			os.Exit(provider.Read(ctx, environment, os.Stdout, os.Stderr))
+		}
 		os.Exit(provider.Create(ctx, environment, os.Stdin, os.Stdout, os.Stderr))
 	}
 	if len(os.Args) == 2 && os.Args[1] == "--watchdog-check" {
