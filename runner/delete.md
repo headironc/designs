@@ -37,4 +37,4 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
 
 测试使用私有 Unix HTTP 服务验证实际 LXD SDK，以及真实子进程替身验证参数、固定输入、成功、退出失败、取消、输出超限和 SIGKILL。状态测试覆盖名称错配、UUID 替换、未完成 bootstrap、写前失败、资源残留、提交失败、latch 保留、再次调用拒绝和释放后的创建准入。创建、watchdog 与共享状态事务的原回归同时运行。
 
-本片交付 provider 删除与占用记录的闭环。跨 GitHub job、runner 注销、GARM 原实例、QEMU/cgroup、快照和临时凭据的完整生命周期验收仍由 [runner 架构](../ci-architecture.md#生命周期与恢复)约束。本片测试不证明真实任务或宿主资源已经闭合。没有启用 ScaleSet、连接真实 LXD、创建或删除真实 VM，也没有修改安装路径。records-only、旧记录迁移、其余 provider 命令和部署另行选择。
+本片交付 provider 删除与占用记录的闭环。跨 GitHub job、runner 注销、GARM 原实例、QEMU/cgroup、快照和临时凭据的完整生命周期验收仍由 [runner 架构](../ci-architecture.md#生命周期与恢复)约束。本片测试不证明真实任务或宿主资源已经闭合。没有启用 ScaleSet、连接真实 LXD、创建或删除真实 VM，也没有修改安装路径。[正常读取](read.md)由对应能力维护；records-only、旧记录迁移和部署另行实施。

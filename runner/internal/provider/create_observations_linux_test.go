@@ -117,6 +117,14 @@ func TestCreateLXDObservations(t *testing.T) {
 			if (after == nil) != afterOK {
 				t.Fatalf("post-create: %v", after)
 			}
+			for _, id := range []string{controllerID, poolID} {
+				bound := withLXD(ctx, socket, func(client lxd.InstanceServer) error {
+					return boundInstance(client, guardPolicy{Controller: p.Controller, Pool: p.Pool, Image: p.Image}, activeInstance{Name: "runner-one", UUID: id})
+				})
+				if (bound == nil) != (afterOK && id == controllerID) {
+					t.Fatalf("read of recorded UUID %s: %v", id, bound)
+				}
+			}
 		})
 	}
 }
