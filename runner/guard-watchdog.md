@@ -44,4 +44,4 @@ SIGTERM/SIGINT 取消观察，最外层检查限时 85 秒。现有 root watchdo
 
 Linux 验收运行 `go test -race -count=1 ./...`、`go vet ./...`、`go mod verify`，并静态构建 `guarded-provider` 和 `provider-watchdog`。SDK 测试使用本地 Unix HTTP 服务及私有 `dbus-daemon`，不访问宿主 LXD 或 systemd。覆盖状态转换、599/600 秒边界、准确整数、绑定错误、响应上限、取消、锁争用、进程中断、替换前后故障和再次进入。普通挂载观察测试仅只读 `/proc`；不创建或修改挂载。
 
-现有 `provider-watchdog` 的子调用路径改为 `/opt/nucleus-halo/bin/guarded-provider --watchdog-check`。正常启动也消费这个二进制，后续增加了 [VM 创建](create.md)与[删除](delete.md)入口。GARM external provider 路径保持独立，完整切换等待其余命令及部署验收。成品配套包含两个 Go 二进制与相应文档；watchdog 切片不安装、不启动 timer，不恢复 Python，不启用 ScaleSet。旧未结操作仍由原恢复责任处理。
+现有 `provider-watchdog` 的子调用路径改为 `/opt/nucleus-halo/bin/guarded-provider --watchdog-check`。正常启动也消费这个二进制，后续增加了 [VM 创建](create.md)、[删除](delete.md)与[正常读取](read.md)入口。GARM external provider 路径保持独立，完整切换等待剩余能力及部署验收。成品配套包含两个 Go 二进制与相应文档；watchdog 切片不安装、不启动 timer，不恢复 Python，不启用 ScaleSet。旧未结操作仍由原恢复责任处理。
