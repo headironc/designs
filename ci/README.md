@@ -112,7 +112,9 @@ node ci/local-docs.ts \
 
 输出保留输入 receipt、容器身份、日志和 `designs-probe.json`。退出或取消后入口核原容器状态；运行中的容器只请求一次停止，再查原状态。未知状态使本次失败，保留身份供恢复，不创建第二次执行。已停止的容器也保留供查验；确认原状态后由维护者按 receipt 中的准确 ID 删除，不使用批量 prune。
 
-排障先读输出目录的 `result.json`，核 `passed`、`cancelled`、`attached`、`container.State` 和 `error`。若没有生成 `evidence/designs-probe.json`，再读 `container.log` 定位失败阶段，不能把缺报告当作检查通过。已有报告时，检查 `report.errors` 和 `report.observations`：用 `request.name` 找到失败义务，连同启动、退出、超时、取消、结清状态及 `diagnostic` 判断。诊断文本供定位问题，不能替代 verifier 的结果；原报告可能含候选输出，按私有证据保存，不直接粘贴到公共日志。
+排障先读输出目录的 `result.json`，核 `passed`、`cancelled`、`attached`、`container.State` 和 `error`。准备阶段失败可能只有 `receipt.json`，尚无 result 或容器日志；保留调用错误，核 receipt 中的原容器名是否实际创建，不能只凭分配了名称认定已启动。磁盘配额或复制失败先修复存储条件，再使用新输出目录，保留原失败目录。
+
+若没有生成 `evidence/designs-probe.json`，再读已有的 `container.log` 定位失败阶段，不能把缺报告当作检查通过。已有报告时，检查 `report.errors` 和 `report.observations`：用 `request.name` 找到失败义务，连同启动、退出、超时、取消、结清状态及 `diagnostic` 判断。诊断文本供定位问题，不能替代 verifier 的结果；原报告可能含候选输出，按私有证据保存，不直接粘贴到公共日志。
 
 本版本监督器返回的 `diagnostic` 是含 `stdout`、`stderr` 的 JSON 字符串；监督器返回前失败时该字段可能为空。两路各保留首尾 16 KiB，超出部分标出省略字节数，不代表保留了完整日志。按报告绑定的 S 版本解释历史诊断，不能对旧报告强行套用新格式。两路累计输出超过 32 MiB 时检查失败，仍须核进程是否结清。诊断保留与输出限制由 [S 的启动合同](../ci-architecture.md#运行时启动也是可信输入)维护。
 
