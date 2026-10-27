@@ -508,3 +508,42 @@ func TestConnectFailureDoesNotRecordAnUnsentStop(t *testing.T) {
 		t.Fatalf("record=%+v", r)
 	}
 }
+
+func TestManagerReplacementDuringSaveDoesNotReceiveStop(t *testing.T) {
+	dir := t.TempDir()
+	bus := newBusFixture(t, filepath.Join(dir, "stop-request.json"))
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	replacement, err := bus.stopper.connect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replacement.api.Close()
+	if err := replacement.control.Export(bus, "/org/freedesktop/systemd1", managerName+".Manager"); err != nil {
+		t.Fatal(err)
+	}
+	r := &stopRecord{Version: 2, Unit: controllerUnit}
+	save := func() error {
+		if err := atomicJSON(dir, "stop-request.json", r); err != nil {
+			return err
+		}
+		if _, err := bus.service.ReleaseName(managerName); err != nil {
+			return err
+		}
+		reply, err := replacement.control.RequestName(managerName, dbus.NameFlagDoNotQueue)
+		if err != nil || reply != dbus.RequestNameReplyPrimaryOwner {
+			t.Fatalf("replacement owner: reply=%v err=%v", reply, err)
+		}
+		return nil
+	}
+	if err := bus.stopper.request(ctx, r, save); err == nil || bus.stopCount() != 0 {
+		t.Fatal("stop submitted after manager changed during save")
+	}
+	previous := loadStop(t, bus.record)
+	if previous.Job != 0 || previous.Manager == "" {
+		t.Fatalf("original intent lost: %+v", previous)
+	}
+	if err := bus.stopper.recover(ctx, &previous, save); err == nil || bus.stopCount() != 0 {
+		t.Fatal("manager replacement granted a retry")
+	}
+}

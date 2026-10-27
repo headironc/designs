@@ -161,6 +161,9 @@ func (s *systemdStop) request(ctx context.Context, r *stopRecord, save func() er
 	if err := save(); err != nil {
 		return err
 	}
+	if err := s.sameManager(ctx, b, r); err != nil {
+		return err
+	}
 	// Fail rather than replace a conflicting job. A failed call may have been
 	// delivered: Job remains zero and recovery never repeats this request.
 	job, err := b.api.StopUnitContext(ctx, controllerUnit, "fail", nil)
