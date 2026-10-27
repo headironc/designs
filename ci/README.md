@@ -120,6 +120,15 @@ node ci/local-docs.ts \
 
 [`container-acceptance.ts`](container-acceptance.ts) 验收监督器自身的行为：非 root、失败退出、超时、取消、后代结清和私有数据拒绝。该脚本仍限于一次性容器，不能在宿主直接运行。
 
+[`preparation-acceptance.mjs`](preparation-acceptance.mjs) 验收候选 `.shared` 的完整只读复制及七项拒绝场景。它导入文档探针，复用探针已验证的 inputs，必须同样传入固定 bundle 和锁；缺少参数会在建立夹具前失败。仅在采用上述相同隔离设置、工具与源码挂载的全新容器内，将启动命令替换为：
+
+```sh
+/host-tools/node /source/ci/preparation-acceptance.mjs \
+  /shared-input/shared.bundle /shared-input/shared.lock.json
+```
+
+文档探针先通过，preparation 才继续。核新 evidence 目录的 `preparation-report.json` 和 `preparation-result.json`，确认正例成功且七项拒绝均完成。该验收会向可丢弃 S 副本加入逃逸链接反例，不复用它运行后续验收，也不覆盖原报告；`local-docs.ts` 默认仍只运行文档探针。
+
 ## Hosted 上传与消费
 
 固定 P 的 JavaScript action 拥有报告 operand 和 artifact 名。S 的上传入口核准确 Node、真实 hosted 环境及原 job 的受保护报告。`ACTIONS_RUNTIME_TOKEN`、`ACTIONS_RESULTS_URL` 由平台提供，不接受候选提供或写进日志。

@@ -190,7 +190,7 @@ const target = {
   target: "main",
   workflow: ".github/workflows/local-docs.yml",
 };
-const inputs = BoundInputs.verify(
+export const inputs = BoundInputs.verify(
   { policy: source, shared: sharedSource, distribution },
   { event: "pull_request_target", base: revision, head, integration, tree },
   { policy, shared, candidate, tools },
