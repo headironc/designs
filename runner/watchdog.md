@@ -20,7 +20,7 @@ watchdog 在独立的 `/var/lib/nucleiron-watchdog` 保存记录。目录由 roo
 
 `state.json` 版本为 `1`，保存准确 policy 绑定、`login_pending` 和 `disable_pending`。后者为原请求的 ScaleSet ID，`0` 表示没有未结禁用请求。临时文件写完、同步后原子替换记录，再同步目录。每次外部写入之前先持久化意图；存储失败时不发送该写入。记录不保存密码或 session token。
 
-登录响应丢失时，`login_pending` 保持为真；新调用拒绝再次登录。成功收到 token 并持久化后，才进入停接观察。禁用结果不明时保留原 ID，新调用只能读取该 ID；看到仍启用、对象缺失或身份变化均不重发 PUT。准确读回禁用后才清除未结意图。policy 变化和不支持的状态记录均拒绝继续。
+登录响应丢失时，`login_pending` 保持为真；新调用拒绝再次登录。成功收到 token 后，程序持久化 `login_pending=false`。token 仅驻留内存，用于后续请求。禁用结果不明时保留原 ID，新调用只能读取该 ID。看到仍启用、对象缺失或身份变化均不重发 PUT。准确读回禁用后才清除未结意图。policy 变化和不支持的状态记录均拒绝继续。
 
 停接失败时，程序先独占写入并同步 `stop-request.json`，再调用一次 `/usr/bin/systemctl stop --no-block nucleiron.service`。成功返回只记为 `requested`，不声称服务已经停止；失败或回执丢失保留 `pending`。日志只报告固定阶段和结果。已有停止记录时，后续 timer 直接报告检查原请求，不重复登录、PUT 或停止请求。状态目录或停止意图无法持久化时，不发送无记录的停止请求，明确报告尚未请求停服。
 

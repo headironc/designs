@@ -347,13 +347,19 @@ func TestProtectedFilesAndStopFailure(t *testing.T) {
 				if err := os.Remove(f.o.password); err != nil {
 					t.Fatal(err)
 				}
+				linkTarget := filepath.Join(filepath.Dir(f.o.password), "valid-password")
+				if mode == "symlink" || mode == "hardlink" {
+					if err := os.WriteFile(linkTarget, []byte("synthetic-password"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
 				switch mode {
 				case "symlink":
-					if err := os.Symlink(f.o.policy, f.o.password); err != nil {
+					if err := os.Symlink(linkTarget, f.o.password); err != nil {
 						t.Fatal(err)
 					}
 				case "hardlink":
-					if err := os.Link(f.o.policy, f.o.password); err != nil {
+					if err := os.Link(linkTarget, f.o.password); err != nil {
 						t.Fatal(err)
 					}
 				case "fifo":
