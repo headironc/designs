@@ -48,7 +48,7 @@ RUNNER_FIREWALL_NAMESPACE=1 go test -count=1 -tags=integration \
 
 `nft --check` 和应用是两个调用，系统状态可能在两者之间变化。检查通过不保证应用成功；应用以 nft 的单次事务完成。非零退出保留失败阶段与原因；应用超时、取消或结果丢失后，先检查实际表状态，不假定未生效，不自动重发。
 
-本片不能代替完整 runner 的 Go 接续。provider、凭据、连接、VM 生命周期及旧未知操作仍按 [结构与实施切片](architecture.md) 分别交付。现有 Python 恢复现场保全；本片不重启原操作。
+本片不能代替完整 runner 的 Go 接续。provider、凭据、连接、VM 生命周期及旧未知操作仍按 [结构与实施切片](architecture.md) 分别交付。维护窗口的进入、写入和退出条件见 [records-only 恢复协议](records-recovery.md)，对应 Go 运行能力尚未实现。现有 Python 恢复现场保全；本片不重启原操作。
 
 ## 行为来源
 

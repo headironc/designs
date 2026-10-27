@@ -22,7 +22,7 @@
 | `vm-restore-guard-pin-20261026/lifecycle.py` → GitHub/GARM/LXD/宿主事实 | 一次 VM 执行的验收与故障恢复 | 绑定 run/job/attempt、agent、VM UUID、QEMU 身份及 cgroup；回收成功与任务用例通过是两个结果 |
 | staging / collect / diagnosis 入口 → 固定源码、受保护原件和公开输出 | 程序发布绑定、只读诊断与脱敏 | 发布清单不授予执行；公开文件在特权操作前独占创建；历史未知操作仍由原程序解释 |
 
-初始 guard 与后续 records-only guard 不是等价副本。初始代码仍固定旧 repository URL。rebind 修复源码已有保全版本，但实际新 repository UUID 尚未交付。watchdog 消费显式 policy 输入并以合成身份验证；部署仍依赖真实绑定和原操作终态。guard 与 records-only 后续片保留完整恢复职责，不迁用旧许可。
+初始 guard 与后续 records-only guard 不是等价副本。初始代码仍固定旧 repository URL。rebind 修复源码已有保全版本，但实际新 repository UUID 尚未交付。watchdog 消费显式 policy 输入并以合成身份验证；部署仍依赖真实绑定和原操作终态。[Records-only 恢复协议](records-recovery.md)维护新 Go 窗口的事实所有者、完整退出条件和实施依赖；当前运行能力尚未实现。
 
 网络、镜像和诊断安装脚本还承担配置生成与宿主部署。模板来源与部署选择分开维护，不把现有 `/etc` 配置直接入库。已按来源清单核对日志模板：`guest-logs-server.conf` 的 SHA256 为 `4b93a348815e1079c31eb4c67996d7d5248efdf080ad462d4ef43f0a0541b0ad`。它用 `omfile` 写入 `/var/log/nucleiron/guests/current.log`，安装脚本配套 logrotate。旧测试中的 omprog 路径替换不证明当前存在该消费者。运行部署状态仍以原 owner 的宿主验收为准。
 
@@ -134,7 +134,9 @@ guard 的共享 policy 拥有 `controller_id`、`repository_id`、`scaleset_name
 | Go guard VM 删除与容量释放（已合入） | 删除准确绑定实例，原 native 结束和 LXD 核验后才释放 provider 容量 | bootstrap 完成、写前记录、实例/可写卷及 operation 核验；未知拒重发，保留 latch，不代替真实 job 完整生命周期验收 |
 | Go guard 正常只读协议（已合入） | GARM 查询 native 版本或准确绑定的实例，guard 记录保持不变 | GetVersion、GetInstance、ListInstances，身份与响应核验；不含 records-only、清记录或部署 |
 | ScaleSet 池身份修正（本片） | 实际 ScaleSet 请求按原派生身份通过完整 guard 调用链 | 共享 policy 校验、实际协议格式回归及错绑定拒绝；不增加普通 pool 模式，不改记录或部署 |
-| records-only 恢复启动 | controller 仅在准确维护许可与恢复条件成立时启动 | systemd 原 job、SQLite 只读事实、许可与原件核验及失败恢复；不迁用旧许可，不转换旧记录或增加 Python fallback |
+| [新 Go 操作分配记录](records-recovery.md#实施边界与验收) | 原资源仍可核验时生成可信请求与实际分配的准确绑定 | 实际入口核平台分配、VM/QEMU/cgroup/存储身份并独占持久化；不创建 VM、注册 runner 或派发 job，不迁用旧记录 |
+| [原执行闭合诊断](records-recovery.md#实施边界与验收) | 操作者从新 Go 原执行记录取得准确闭合事实及缺口 | 实际诊断入口消费 GitHub/GARM/LXD/宿主和 SQLite 只读观察；不签许可、不清记录、不释放容量 |
+| [records-only 维护窗口](records-recovery.md) | 在准确许可下清理原 GARM 遗留记录，并回到停止且停接的状态 | 签发、原 job 启动准入、维护读取、清理、停止、guard 恢复和许可退役；不迁用旧许可，不含正常服务恢复或启用接单 |
 | watchdog GARM 客户端接入（已合入） | 原停接流程通过 GARM client 完成同一准确目标禁用与读回 | 保留身份、输入、时限、未知登录和禁用请求边界；不同时改造 systemd 停止恢复 |
 | watchdog systemd 停止与恢复（已合入） | 一次停止请求具有可追踪的原 job 与终态核验 | go-systemd 订阅、写前记录、原 job 回执及 unit/进程/cgroup 核验；丢失终态不补造成功，旧 CLI 记录保全拒绝自动迁移，不重新接入或部署 |
 | nftables 包接入 | 结构化部署配置经 Go 包原子替换自有表 | 配置生成与校验、netlink、unit 消费和隔离验收；不改变网络策略，不保留 CLI fallback |
