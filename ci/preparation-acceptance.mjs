@@ -1,63 +1,17 @@
 import assert from "node:assert/strict";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { requireSupervisor } from "./sandbox.ts";
 
-// Reuse the disposable-container fixture; never invoke this on a persistent host.
+// Reuse the fixture's validated inputs and explicit bundle/lock CLI arguments.
+// Never invoke this on a persistent host.
 requireSupervisor("local-container");
-await import("./designs-acceptance.mjs");
-const policy = "/work/policy",
-  shared = policy + "/.shared",
-  candidate = "/work/candidate";
-const { BoundInputs, fileDigest, git } = await import(
-  shared + "/ci/binding.ts"
-);
+const { inputs } = await import("./designs-acceptance.mjs");
+const { policy, shared, candidate } = inputs.paths;
+const { composition } = inputs;
+const { fileDigest } = await import(shared + "/ci/binding.ts");
 const { VerifiedExecution, verifyChecks } = await import(
   shared + "/ci/execution.ts"
-);
-const pin = (directory) => ({
-  commit: git(directory, ["rev-parse", "HEAD"]),
-  tree: git(directory, ["rev-parse", "HEAD^{tree}"]),
-  lockPath: "bun.lock",
-  lock: fileDigest(directory + "/bun.lock"),
-});
-const bundle = "/work/shared.bundle";
-const composition = {
-  policy: pin(policy),
-  shared: pin(shared),
-  distribution: fileDigest(bundle),
-};
-const integration = git(candidate, ["rev-parse", "HEAD"]);
-const [base, head] = git(candidate, [
-  "show",
-  "-s",
-  "--format=%P",
-  "HEAD",
-]).split(" ");
-const probe = JSON.parse(readFileSync("/evidence/designs-probe.json", "utf8"));
-const inputs = BoundInputs.verify(
-  composition,
-  {
-    event: "pull_request_target",
-    base,
-    head,
-    integration,
-    tree: git(candidate, ["rev-parse", "HEAD^{tree}"]),
-  },
-  { policy, shared, candidate, tools: probe.paths.tools },
-  bundle,
-  {
-    repository: "headironc/designs",
-    repositoryId: "1434658318",
-    target: "main",
-    workflow: ".github/workflows/docs.yml",
-  },
 );
 const checks = [
   {

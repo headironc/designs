@@ -7,6 +7,8 @@
     "node": "26.8.1"
   },
   "scripts": {
+    "format:check": "prettier --check",
+    "format": "prettier --write",
     "test": "node --test ci/*.test.ts ci/*.test.mjs",
     "typecheck": "tsc --noEmit"
   },
