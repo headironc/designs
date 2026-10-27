@@ -4,7 +4,7 @@
 
 ## 消费与结果
 
-镜像必须预装 `/usr/local/bin/runner-bootstrap` 和 `/home/runner/actions-runner`。Kiln 拥有镜像构建；本片交付二进制源码及模板，不改镜像或运行中的 provider。原生 cloudconfig 仍以 `runner` 用户执行渲染脚本。模板关闭 shell 跟踪，token 不进入命令参数或环境变量。
+VM 基础镜像必须预装 `/usr/local/bin/runner-bootstrap` 和 `/home/runner/actions-runner`。VM 基础镜像由 runner 能力维护，Kiln 负责 job 内的任务容器镜像；归属见 [两层镜像](../ci-architecture.md#两层镜像与共用架构)。本片交付二进制源码及模板，不改镜像或运行中的 provider。原生 cloudconfig 仍以 `runner` 用户执行渲染脚本。模板关闭 shell 跟踪，token 不进入命令参数或环境变量。
 
 输入只接受 JIT 模式和原网关的准确地址：`https://10.203.64.1:9443/api/v1/metadata` 与 `https://10.203.64.1:9443/api/v1/callbacks`。允许末尾斜线，不接受其他路径或协议。TLS 使用系统信任，绕过公共代理并拒绝重定向。每次请求限时 20 秒，响应上限为原合同的 1 MiB。
 

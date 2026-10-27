@@ -1,6 +1,6 @@
 # Runner 的 Go 结构与实施切片
 
-本设计将 runner 自有实现改为 Go，并按独立业务结果交付。[专用防火墙重载](README.md)和 [guest bootstrap](bootstrap.md) 已合入。当前实现片是 [provider 异常停接](watchdog.md)。现有 Python 快照用于行为对照和原操作恢复。GARM、LXD provider、nginx、rsyslog、Squid 和 dnsproxy 保持各自职责，不重写第三方组件。
+本设计将 runner 自有实现改为 Go，并按独立业务结果交付。[专用防火墙重载](README.md)、[guest bootstrap](bootstrap.md) 和 [provider 异常停接](watchdog.md) 已合入。已选的下一实现片是 Go guard 正常启动准入，尚未实现。本文已采用下述 Go 包，依赖随对应消费者接入。现有 Python 快照用于行为对照和原操作恢复。GARM、LXD provider、nginx、rsyslog、Squid 和 dnsproxy 保持各自职责，不重写第三方组件。
 
 跨仓库边界由 [CI 架构](../ci-architecture.md#runner-与-kiln) 维护。designs 拥有 runner 自有程序及发布成品。Kiln 拥有任务镜像，消费仓库拥有工作流和业务检查。新代码在独立工作树准备，原接入现场和未知操作保全。
 
@@ -40,8 +40,9 @@ runner/
     runner-bootstrap/     # guest JIT setup
     runner-admin/         # explicit connection, inspection and recovery commands
   internal/
-    firewall/             # owned tables, checked rules and atomic application
+    firewall/             # owned rules and atomic nftables transactions
     provider/             # policy, guard state, native invocation and reconciliation
+    watchdog/             # admission checks and bound controller stop requests
     bootstrap/            # guest identity and completion protocol
     connection/           # repository and disabled ScaleSet binding
     credentials/          # sealed GARM payload, signing and session lifecycle
@@ -57,6 +58,36 @@ runner/
 操作记录由各业务能力解释。文件独占创建、同步与安全读取可在首次复用时共享，但 `unknown` 的判断与恢复条件仍属于原业务。一次操作的输入、写意图、外部回执和结果不拆成彼此独立的基础设施 PR。
 
 GARM 仍负责 controller 与其数据库。自有代码通过已采用 API 和受限只读核验观察它，不新增直接数据库写入。原 Go signer 使用 GARM 的解封库和准确 JWT 协议。迁移时保留实际依赖与测试，不重新实现加密格式。
+
+## 已采用的 Go 包
+
+以下选型覆盖整个 runner，均为已接受的目标依赖。当前 `go.mod` 仍只有标准库，文档采纳不表示代码已接入。每个包随首个真实消费者进入独立实施片。已有实现也按表中目标迁移，不建立双版本兼容路径。
+
+| 包与上游 | 承担的能力与消费者 | 自有代码保留的责任 |
+| --- | --- | --- |
+| Go 标准库：`os`、`crypto/sha256`、`encoding/json`、`net/http`、`os/exec`、`database/sql` | 文件、摘要、编码、传输、原生 provider 进程及数据库接口 | 输入来源、准确字节、权限、时限、错误处理与秘密脱敏 |
+| [`golang.org/x/sys/unix`](https://pkg.go.dev/golang.org/x/sys/unix) | guard、watchdog 和 bootstrap 的 Linux 文件锁及受保护文件操作 | 锁的生命周期、owner/mode、链接限制与原子持久化；不能以一次 syscall 成功代替完整文件校验 |
+| [`github.com/cloudbase/garm/client`](https://github.com/cloudbase/garm/tree/v0.2.1/client) | watchdog、连接与生命周期能力访问 GARM API | 绑定 controller/repository/ScaleSet、发送前意图、准确目标读回及 unknown 处置 |
+| [`github.com/cloudbase/garm-provider-common/params`](https://pkg.go.dev/github.com/cloudbase/garm-provider-common/params) | guard 消费 external provider 请求与响应；bootstrap 使用原生模板参数 | 命令白名单、必填字段、身份、容量及准入校验；协议类型不代表已经获得许可 |
+| [`github.com/canonical/lxd/client`](https://pkg.go.dev/github.com/canonical/lxd/client) | guard 和生命周期能力读取 VM、卷与原 LXD operation | 资源归属、原操作终态和释放容量条件；VM 写操作仍调用现有 native provider |
+| [`github.com/google/go-github`](https://github.com/google/go-github) 的版本化 `github` 包 | 生命周期与连接能力读取 GitHub run、job、runner 和注册状态 | run/attempt/job 对应关系、权限边界与闭合判断 |
+| [`github.com/coreos/go-systemd/v22/dbus`](https://pkg.go.dev/github.com/coreos/go-systemd/v22/dbus) | watchdog 停服、服务安装窗口及恢复校验 | 先订阅再发送、持久化原 job、分别确认 job 终态与 unit/进程/cgroup 状态 |
+| [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite)，通过 `database/sql` 使用 | records-only 恢复中读取 GARM SQLite 事实 | 原服务身份、只读连接、WAL 可见性与 schema 绑定；禁止通过直接写库制造完成状态 |
+| [`github.com/google/nftables`](https://github.com/google/nftables) | firewall 通过 netlink 构造并原子提交自有表规则 | 部署输入校验、自有表边界、规则语义、事务结果及未知发送恢复 |
+
+基础库有明确的维护与实际依赖来源。[runc 使用 go-systemd](https://github.com/opencontainers/runc/blob/main/go.mod)，[GoReleaser 使用 go-github](https://github.com/goreleaser/goreleaser/blob/main/go.mod)，[Tailscale 使用 nftables](https://github.com/tailscale/tailscale/blob/main/go.mod)。这些是选型依据，不证明本项目已经集成验收。`google/nftables` 位于 Google 组织。README 同时声明它不是 Google 官方产品，两者不冲突。LXD client 随 LXD 维护。GARM client 与 provider-common 随 GARM 生态维护。产品维护不等同于 SDK 独立的长期 API 稳定承诺。
+
+实施片在 `go.mod` 和 `go.sum` 固定实际导入版本。GARM client 以当前服务基线 v0.2.1 核对 API。provider-common 以 native provider v0.1.5 使用的 v0.1.9 核对协议。LXD client 绑定部署服务版本及使用的 API extensions。其余包在接入时选用核验过的稳定发布；没有适用发布标签时固定核验提交。`modernc.org/libc` 遵循 sqlite 所要求的配套版本。维护动态从上游发布与安全公告核对，不把本文的来源链接当成可浮动构建依赖。
+
+SDK 接入保留现有超时、代理、重定向、响应上限和精确整数要求。逐项测试缺省、`null` 与错误类型的区别，不让生成类型的零值掩盖非法响应。写操作只由业务 owner 决定是否发送；关闭会重发业务写入的 SDK 或 transport 重试。SDK 返回错误或 context 结束后，仍沿原请求核验结果。依赖升级检查实际调用面、传递依赖、漏洞和协议变化，不自行增加兼容层。
+
+### 防火墙接入 nftables 包
+
+已合入的 firewall 读取 nft 文本并调用 CLI，具体行为见 [当前实现](README.md)。目标实现改用 `google/nftables`，不保留 CLI fallback。该包不承担 nft 文本解析；部署能力提供仅覆盖当前受管规则的结构化配置，firewall 校验配置并生成规则。配置生成、消费、unit 绑定与切换说明在同一实施片交付，不先建设通用规则语言或解析框架。
+
+迁移片保持现有端口、地址、域名对应的网络策略及路由边界。存在性读取完成后，将自有表删除与重建放在一次 netlink batch 中。仅替换 `inet nucleiron` 与 `bridge nucleiron`，其他表保持。配置错误在发送前拒绝；内核拒绝 batch 时原规则保持。发送后超时或回执丢失保留未知结果，先核实际表状态，不重发。
+
+验收在独立网络 namespace 比较原规则与新规则的实际允许、拒绝及转发行为。覆盖首次加载、替换、非法配置、内核事务拒绝、并发及回执丢失。发送和恢复路径的替身检查与真实内核原子性检查分别报告。新实现先校验配置，再提交一次内核事务。原 CLI 的检查与应用流程不变成两次 netlink 写入。实际切换固定配置与二进制版本，旧未知操作按原身份处理。
 
 ## 保持的协议与故障语义
 
@@ -84,8 +115,13 @@ GARM 仍负责 controller 与其数据库。自有代码通过已采用 API 和�
 | 结构说明 | 审阅者能定位职责、协议和实施顺序 | 本文及必要导航；不带历史源码大包，不带运行实现 |
 | 专用防火墙重载（已合入） | systemd 可消费 Go 入口，检查并原子替换自有 nftables 表 | 实际入口、规则读取、nft 调用、unit 消费绑定、构建与失败测试；不改端口、域名、路由、其他表或生产服务 |
 | guest bootstrap（已合入） | 原生 provider 渲染并启动 Go guest 程序，产出相同 ready 回执 | JIT 安装、失败反馈、guest 成品与模板绑定；不启用 ScaleSet，不改 controller 凭据 |
-| provider 异常停接（当前实现片） | Go watchdog 消费 guard 检查接口，异常时停止准确目标的接入 | 身份核验、禁用及读回、未知请求记录、失败停止请求；不迁移 guard 或 records-only，不启用服务 |
-| provider 准入与恢复启动校验 | GARM 经 Go guard 执行受限 native 操作，启动按准确许可准入 | guard、records-only 启动校验、原子状态及必要恢复兼容；不创建新 repository 或改变审批范围 |
+| provider 异常停接（已合入） | Go watchdog 消费 guard 检查接口，异常时停止准确目标的接入 | 身份核验、禁用及读回、未知请求记录、失败停止请求；不迁移 guard 或 records-only，不启用服务 |
+| Go guard 正常启动准入（已选，待实现） | controller 正常启动前核准配置、程序摘要与 guard 状态 | 标准库与 x/sys 文件保护、并发锁、未结操作拒绝；所有维护模式启动拒绝，保全旧许可；不含 VM 写操作和 records-only |
+| Go guard VM 准入与写操作 | GARM 经 Go guard 执行准确绑定的 native 操作 | provider-common 协议、LXD client 核验、写前意图和失败恢复；下一次创建等待上一执行完整闭合，不仅检查 VM/卷消失 |
+| records-only 恢复启动 | controller 仅在准确维护许可与恢复条件成立时启动 | systemd 原 job、SQLite 只读事实、许可与原件核验及失败恢复；不迁用旧许可，不转换旧记录或增加 Python fallback |
+| watchdog GARM 客户端接入 | 原停接流程通过 GARM client 完成同一准确目标禁用与读回 | 保留身份、输入、时限、未知登录和禁用请求边界；不同时改造 systemd 停止恢复 |
+| watchdog systemd 停止与恢复 | 一次停止请求具有可追踪的原 job 与终态核验 | go-systemd 订阅、请求、持久化及恢复闭环；旧 CLI 未结请求仍按原身份处理，不猜测补造 job |
+| nftables 包接入 | 结构化部署配置经 Go 包原子替换自有表 | 配置生成与校验、netlink、unit 消费和隔离验收；不改变网络策略，不保留 CLI fallback |
 | 服务与版本安装窗口 | 在准确前态中停止服务、安装一个版本，并恢复或保留可恢复状态 | systemd 原 job、文件事务、回滚与配置漂移检查；不将通用文件复制单独提前交付 |
 | 凭据消费与连接 | 一次已绑定操作建立并验证 disabled 连接，故障后保留可解释结果 | signer、凭据证明、受保护记录、repository/ScaleSet 回执及只读恢复；稳定 rebind 到达后再确定最小闭包 |
 | VM 终态与恢复 | 对一个准确 job 区分用例通过和仅资源回收，并验证资源归零 | GitHub/GARM/LXD/进程/cgroup 证据和必要服务恢复；四种任务终态按实际接口验证，不冒充生产全验收 |
@@ -93,13 +129,11 @@ GARM 仍负责 controller 与其数据库。自有代码通过已采用 API 和�
 
 每次开始后续片前，依据已经到位的消费者重新检查边界。若某一行包含两个可独立验收结果，再拆小。同一恢复不变量跨层时保留在一片，确保中间版本也能安全运行。
 
-已选的首个实现片是专用防火墙重载。原 `network.py` 为 unit 的 `ExecStart` 和 `ExecReload` 设置了 Python 入口。新片交付 Go 可执行程序及对应 unit 模板，规则内容保持外部输入。检查通过后使用同一份规则应用；失败返回非零，不自动重试。
-
-首片验证自有表全部存在、部分存在及均不存在，且其他表保留。失败路径包括规则读取、列表读取或解析、检查与应用失败。检查失败时没有应用；应用失败不报告成功且不重发。用受控 nft 替身测试调用边界，再在隔离 namespace 核实际原子替换。生产加载状态留到切换验收，当前不安装 unit 或修改防火墙。日志采集继续消费 rsyslog 与 logrotate，不加入无消费者的 Go 日志程序。
+已合入组件的具体行为与检查分别由 [firewall](README.md)、[bootstrap](bootstrap.md) 和 [watchdog](watchdog.md) 维护。已选正常启动片先完成自身准入结果，其余片再按真实依赖选择。日志采集继续消费 rsyslog 与 logrotate，不加入无消费者的 Go 日志程序。
 
 ## 构建、验证与后续切换
 
-新自有程序使用 Go 工具链直接构建、测试。`go.mod` 与[构建说明](README.md)固定当前工具链版本及来源。本片只依赖标准库，新构建入口不依赖 Python。Linux 系统行为在独立 Linux 测试目录验证。
+新自有程序使用 Go 工具链直接构建、测试。`go.mod` 与[构建说明](README.md)固定当前工具链版本及来源。当前已合入代码只依赖标准库；后续依赖按上表接入，新构建入口不依赖 Python。先联网取得并核验固定依赖，再在已准备的缓存中关闭网络下载进行构建。Linux 系统行为在独立 Linux 测试目录验证。
 
 第三方源码归档仍使用已核版本和摘要。自有 Go module 不直接合并两份第三方 vendor 树。需要的库按实际 import 固定版本，并验证与原协议相符。发布包标注源码提交、依赖、目标平台与各成品摘要。构建记录证明来源，不代替运行许可。
 
@@ -109,4 +143,4 @@ GARM 仍负责 controller 与其数据库。自有代码通过已采用 API 和�
 
 ## 交付范围
 
-结构说明随实现保持更新，运行实现按独立业务结果交付。108 份本地历史源码及既有构建检查保全，不整体进入实现 PR。当前交付 watchdog，后续能力仍待选择。运行版本以稳定交付为准，不拼接修复中的文件。
+结构说明随实现保持更新，运行实现按独立业务结果交付。108 份本地历史源码及既有构建检查保全，不整体进入实现 PR。本次文档修订交付完整包选型、职责和验收边界，不修改依赖或运行代码。正常启动准入已选，其余实施片仍待选择。运行版本以稳定交付为准，不拼接修复中的文件。
