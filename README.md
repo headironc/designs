@@ -123,7 +123,7 @@ bun run go:check
 
 container 层按 normal、race 顺序使用两个独立的一次性无网络容器。normal 静态产物执行原 [数据库降权用例](runner/closure.md#验证与后续边界)及全部 `TestInstalled*`；race 产物按 [installed 验证合同](runner/installed-evidence.md#未观察事实与验证)执行全部 `TestInstalled*`。两份事件分别要求六个 installed 父级及 31 个子用例真实 pass，normal 还必须证明数据库用例通过。normal 失败就结束，不启动 race 掩盖失败。
 
-每个容器只读挂入本次 lifecycle 测试产物，再复制到可替换的 `/tmp/lifecycle.test`。容器中创建 UID 24567/GID 24568 的私有 NSS fixture。数据库目录初始不存在，不挂业务 socket、数据库或凭据。race 容器先用 `/lib64/ld-linux-x86-64.so.2 --list` 核动态依赖，再执行真实用例。缺 loader/libc 时保留失败，不换镜像或联网补装。日志由 Go `test2json` 转成事件验证。nft 层沿 [原 namespace 测试](runner/README.md#构建与检查)在内部执行 `unshare`。核网络 namespace 已改变后才调用 nft。它不在宿主加载规则，也不运行 runner 服务或安装 unit。
+每个容器只读挂入本次 lifecycle 测试产物，再复制到可替换的 `/tmp/lifecycle.test`。容器中创建 UID 24567/GID 24568 的私有 NSS fixture。数据库目录初始不存在，不挂业务 socket、数据库或凭据。race 容器先用 `/lib64/ld-linux-x86-64.so.2 --list` 核动态依赖，再执行真实用例。缺 loader/libc 时保留失败，不换镜像或联网补装。日志由 Go `test2json` 转成事件验证。nft 层沿 [namespace 测试](runner/README.md#构建与检查)在内部执行 `unshare`。核实际父进程及自身的 user/network namespace 均已隔离后，才构造私有网络和调用 nft。该层需要 nft、iproute2 和 util-linux，不在宿主加载规则，也不运行 runner 服务或安装 unit。
 
 编译缓存和日志放在忽略的 `runner/.build/`。测试使用本次创建的短真实 `/tmp/dg-*` 目录。Go 1.27 的 `testing.T.TempDir` 优先使用 `GOTMPDIR`。`go test -exec` 仅对测试进程切换到短路径，大编译目录仍留在工作树。子进程使用 umask `022`，让现有夹具的准确权限合同成立。CLI 只在同步 spawn 窗口设置并立即恢复父进程 umask，不改变宿主配置。日志与容器句柄显式使用 `0600`。
 

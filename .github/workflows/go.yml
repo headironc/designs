@@ -71,7 +71,7 @@ jobs:
       - name: Prepare disposable job tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes build-essential dbus-daemon nftables util-linux
+          sudo apt-get install --yes build-essential dbus-daemon iproute2 nftables util-linux
       - name: Verify private namespace support
         run: unshare --user --map-root-user --net /bin/true
       - run: bun install --frozen-lockfile --ignore-scripts

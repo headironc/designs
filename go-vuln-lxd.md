@@ -6,7 +6,7 @@
 
 ## 已核源码
 
-领域判断以 2026-10-29 的源码阅读为依据，并核对到合并后的 [Runner 源码候选](https://github.com/headironc/designs/commit/c906ea4fb4b871d0d46c18ffcea1940b209cb258)。此前领域工作树中的未交付代码不作为依据。机器绑定位于 [五项处置记录](scripts/go-vuln-lxd.json)。该记录随 PR 接受独立代码和安全审查；记录本身不是审查已完成的凭证。
+领域判断以 2026-10-29 的源码阅读及当前 nftables 消费者的准确字节为依据。新增 firewall 只消费 nftables/netlink，不引入 LXD 客户端、daemon handler 或浏览器接口。已重新核对下列原调用链、完整 14 包集合、模块 checksum 和五份 OSV 内容；这些事实均保持。机器绑定位于 [五项处置记录](scripts/go-vuln-lxd.json)。该记录随 PR 接受独立代码和安全审查；记录本身不是审查已完成的凭证。
 
 依赖固定为 `github.com/canonical/lxd@v0.0.0-20261012123619-3c94d4fae7ff`。固定 Go 1.27.3、Linux amd64、cgo、`-test -tags=integration` 的实际图仅包含 `client` 和 13 个 `shared` 包。准确包名列在记录中，没有 daemon 的 `lxd` 包和服务端 handler。
 
