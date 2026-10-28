@@ -231,6 +231,8 @@ func TestDatabaseChildHelper(t *testing.T) {
 	switch mode {
 	case "worker":
 		os.Exit(databaseWorker(context.Background(), nil, os.Stdin, os.Stdout))
+	case "session-worker":
+		os.Exit(sessionDatabaseWorker(context.Background(), nil, os.Stdin, os.Stdout))
 	case "identity":
 		groups, _ := os.Getgroups()
 		sha, err := runningDigest()
@@ -320,6 +322,36 @@ func TestDatabaseChildInPrivateContainer(t *testing.T) {
 	}
 	if _, err := runDatabaseChild(context.Background(), "/proc/self/exe", args("worker"), r, uid, gid+1); err == nil {
 		t.Fatal("wrong primary group accepted")
+	}
+	if _, err := db.Exec("DELETE FROM instances;" + sessionUsersDDL); err != nil {
+		t.Fatal(err)
+	}
+	p := sessionPlan{1, r.Expected.Operation, r.Expected.Controller, "haloadmin", r.Observed.Host.BootID, strings.Repeat("1", 32), strings.Repeat("2", 64), strings.Repeat("3", 64), 86400, time.Now().Add(time.Minute).Unix()}
+	request, _ := json.Marshal(p)
+	walBefore, err := os.ReadFile(files.path + "-wal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := runDatabaseProcess(context.Background(), "/proc/self/exe", args("session-worker"), request, uid, gid)
+	var session sessionDatabase
+	if err != nil || strictObject(raw, &session) != nil || session.Controller != p.Controller || session.User != "eeeeeeee-0000-4000-8000-000000000005" || session.Generation != 7 || session.UID != uid || session.GID != gid || session.Groups == nil || len(session.Groups) != 0 || session.ObserverSHA != expected {
+		t.Fatalf("service session observer did not bind its real identity: %+v %v", session, err)
+	}
+	walAfter, _ := os.ReadFile(files.path + "-wal")
+	if !bytes.Equal(walBefore, walAfter) {
+		t.Fatal("session worker wrote WAL")
+	}
+	if _, err := runDatabaseProcess(context.Background(), "/proc/self/exe", args("session-worker"), request, uid+1, gid); err == nil {
+		t.Fatal("wrong session worker identity accepted")
+	}
+	if _, err := db.Exec("UPDATE scale_sets SET enabled=1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runDatabaseProcess(context.Background(), "/proc/self/exe", args("session-worker"), request, uid, gid); err == nil {
+		t.Fatal("enabled admission accepted by the actual child")
+	}
+	if _, err := db.Exec("UPDATE scale_sets SET enabled=0"); err != nil {
+		t.Fatal(err)
 	}
 	for _, mode := range []string{"oversize", "wait"} {
 		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)

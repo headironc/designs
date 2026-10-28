@@ -22,6 +22,8 @@
 
 GARM 的既有 producer `acquire-session.py publish_token` 使用 root `0600`、单链接及 raw token 加换行。原 `lifecycle.py API.garm` 按同一合同 strip 后读取，本入口消费相同形状。原 GitHub 路径通过 Human 的受控 CLI profile 调用 `gh api`，不导出 token。本 Go 入口的 GitHub token 文件是尚待运行授权和供应的部署输入；当前只定义并测试消费，不读取或导出既有 CLI OAuth，也不新建凭据。历史 receipt 不迁移。
 
+受管 GARM 凭据由[管理会话窗口](session.md)供应。使用固定受管路径时，另传 `--garm-session-sha256` 绑定原发行成品。会话来源、共享租约、期限和进程秘密保护的合同由该页维护；采集入口仍不自动登录或刷新。
+
 非空的 `GH_*`、`GITHUB_*`、`GARM_*`、`LXD_*` 和代理环境变量均拒绝。TLS 信任文件的 `SSL_CERT_FILE`、`SSL_CERT_DIR` 覆盖也拒绝。入口拒绝 `DEBUG`、`SWAGGER_DEBUG` 和 `GODEBUG` 中的 `http2debug`，并独立关闭 SDK debug。SDK transport 只允许固定服务的 GET，禁用代理和重定向。每次 HTTP 请求限时 15 秒，每份解码后的响应最多 2 MiB。整个入口限时 90 秒。错误只输出固定事件和阶段，不输出 token、路径、API 原文或 SDK 错误正文。
 
 可信请求采用显式版本，不接受未知字段、重复键、大小写别名、尾随 JSON、分数或越界 ID：

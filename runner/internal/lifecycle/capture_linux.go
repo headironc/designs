@@ -167,6 +167,7 @@ type receipt struct {
 
 type capture struct {
 	files       protectedFiles
+	credentials func() error
 	guard       func(context.Context, func(provider.ExecutionBinding, func() error) (func() error, error)) error
 	platform    func(context.Context, request, provider.ExecutionBinding) (int, error)
 	machine     func(context.Context, provider.ExecutionBinding) (machine, error)
@@ -194,6 +195,11 @@ func (c capture) execute(ctx context.Context, requestPath, operations string) (s
 		return "operation", err
 	} else if existing {
 		return "existing", nil
+	}
+	if c.credentials != nil {
+		if err := c.credentials(); err != nil {
+			return "credential", err
+		}
 	}
 	store, err := c.files.reserve(operations, r.Operation, raw)
 	if err != nil {
@@ -270,6 +276,12 @@ func (c capture) execute(ctx context.Context, requestPath, operations string) (s
 // Run exposes a fixed production observation route. Test endpoints and fixture
 // roots are private implementation inputs, never flags or environment settings.
 func Run(ctx context.Context, args []string, output, diagnostic io.Writer) int {
+	if len(args) > 0 && args[0] == "acquire-garm-session" {
+		return runSession(ctx, args[1:], false, output, diagnostic)
+	}
+	if len(args) > 0 && args[0] == "retire-garm-session" {
+		return runSession(ctx, args[1:], true, output, diagnostic)
+	}
 	if len(args) > 0 && args[0] == "inspect-installed" {
 		return runInstalled(ctx, args[1:], output, diagnostic)
 	}
@@ -288,6 +300,9 @@ func Run(ctx context.Context, args []string, output, diagnostic io.Writer) int {
 	if len(args) > 0 && args[0] == "--database-observer" {
 		return databaseWorker(ctx, args[1:], os.Stdin, output)
 	}
+	if len(args) > 0 && args[0] == "--session-database-observer" {
+		return sessionDatabaseWorker(ctx, args[1:], os.Stdin, output)
+	}
 	stage := "arguments"
 	fail := func() int {
 		fmt.Fprintf(diagnostic, "{\"event\":\"execution_capture_refused\",\"stage\":%q}\n", stage)
@@ -302,6 +317,7 @@ func Run(ctx context.Context, args []string, output, diagnostic io.Writer) int {
 	operations := f.String("operations", "", "protected root-owned receipt directory")
 	githubCredential := f.String("github-token-file", "", "existing read-only credential")
 	garmCredential := f.String("garm-token-file", "", "existing read-only credential")
+	sessionSHA := f.String("garm-session-sha256", "", "trusted producer of a managed GARM session")
 	if f.Parse(args[1:]) != nil || f.NArg() != 0 || *requestPath == "" || *operations == "" || *githubCredential == "" || *garmCredential == "" {
 		return fail()
 	}
@@ -313,30 +329,45 @@ func Run(ctx context.Context, args []string, output, diagnostic io.Writer) int {
 	if !controlledEnvironment(os.Environ()) {
 		return fail()
 	}
+	stage = "secret_process"
+	if protectSessionSecrets() != nil {
+		return fail()
+	}
 	files := protectedFiles{uid: 0, boundary: "/"}
-	stage = "credential"
-	gh, err := files.read(*githubCredential, 0600, 64*1024+1)
-	if err != nil {
-		return fail()
-	}
-	ga, err := files.read(*garmCredential, 0600, 64*1024+1)
-	if err != nil {
-		return fail()
-	}
-	ghToken, gaToken := strings.TrimSpace(string(gh)), strings.TrimSpace(string(ga))
-	if !validToken(ghToken) || !validToken(gaToken) {
-		return fail()
-	}
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
-	p := newPlatforms(ghToken, gaToken, nil)
-	defer p.close()
+	var p *platforms
+	var credential *sessionCredential
+	defer func() {
+		if p != nil {
+			p.close()
+		}
+		credential.close()
+	}()
+	loadCredentials := func() error {
+		gh, err := files.read(*githubCredential, 0600, 64*1024+1)
+		if err != nil || !validToken(strings.TrimSpace(string(gh))) {
+			return errRefused
+		}
+		credential, err = loadGARMToken(files, *garmCredential, sessionParent, *sessionSHA, time.Now())
+		if err != nil {
+			return errRefused
+		}
+		p = newPlatforms(strings.TrimSpace(string(gh)), credential.token, nil)
+		return nil
+	}
+	observe := func(ctx context.Context, r request, b provider.ExecutionBinding) (int, error) {
+		if credential.controller != "" && credential.controller != r.Controller {
+			return 0, errRefused
+		}
+		return p.observe(ctx, r, b)
+	}
 	stage = "producer"
 	producerSHA, err := runningDigest()
 	if err != nil {
 		return fail()
 	}
-	c := capture{files: files, guard: provider.InspectExecution, platform: p.observe, machine: observeMachine, process: (hostFiles{proc: "/proc", cgroup: "/sys/fs/cgroup", realFS: true}).observe, now: time.Now, producerSHA: producerSHA}
+	c := capture{files: files, credentials: loadCredentials, guard: provider.InspectExecution, platform: observe, machine: observeMachine, process: (hostFiles{proc: "/proc", cgroup: "/sys/fs/cgroup", realFS: true}).observe, now: time.Now, producerSHA: producerSHA}
 	stage, err = c.execute(ctx, *requestPath, *operations)
 	if err != nil {
 		return fail()

@@ -21,6 +21,8 @@
 
 凭据沿用已有 root `0600` raw token 文件。GitHub 文件仍是待授权供应的部署输入；程序不读取或导出 `gh` OAuth，不登录、mint 或刷新凭据。生产端点固定为 public GitHub、GARM loopback 和宿主 system bus，不接受代理、调试传输或 URL 环境覆盖。
 
+固定受管 GARM 路径另需 `--garm-session-sha256`。原发行来源、共享租约、期限和进程秘密保护沿[管理会话合同](session.md)核验。
+
 第一次请求核验原 boot、准确 GitHub repository/run attempt/job/commit/runner，要求该 job 已终结，并保留真实 conclusion。任务 failure、cancelled 或 timed_out 均可进入这个检查；暂停不会把任务结果改成 success。
 
 GARM 检查同时覆盖准确 controller、repository、原 ScaleSet、全局实例及目标实例清单。当前实例只能是原绑定实例或完整清单证明不存在。额外、未知或错绑定实例均拒绝新请求。

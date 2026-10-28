@@ -124,6 +124,68 @@ func TestPrepareOriginalEvidenceAndReadOnlyReentry(t *testing.T) {
 		}
 	}
 }
+
+func TestPrepareLeaseRetainsOriginalLock(t *testing.T) {
+	f := newPrepareFixture(t)
+	lock, err := os.OpenFile(filepath.Join(f.reader.parent, "owner.lock"), os.O_RDONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	called := false
+	report, err := f.reader.observeWithLease(context.Background(), strings.Repeat("9", 64), func(r prepareReport, check func() error) error {
+		called = true
+		assertPrepareRestrictions(t, r)
+		if r.State != "prepare_records_consistent" || check() != nil {
+			t.Fatal("consistent originals unavailable under lease")
+		}
+		if e := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); e != unix.EWOULDBLOCK {
+			t.Fatalf("original owner lock escaped callback: %v", e)
+		}
+		return errRefused
+	})
+	if !called || err != errRefused || report.State != "prepare_records_consistent" {
+		t.Fatal("consumer refusal lost", called, err, report.State)
+	}
+	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		t.Fatal("original lock leaked after consumer returned", err)
+	}
+}
+
+func TestPrepareLeaseRechecksOriginals(t *testing.T) {
+	for _, mode := range []string{"body", "replacement", "new_entry", "cancel"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newPrepareFixture(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			called := false
+			_, err := f.reader.observeWithLease(ctx, strings.Repeat("9", 64), func(r prepareReport, check func() error) error {
+				called = true
+				if r.State != "prepare_records_consistent" || check() != nil {
+					t.Fatal("invalid initial lease")
+				}
+				path := filepath.Join(f.amendment, "repair.intent.json")
+				switch mode {
+				case "body":
+					testWrite(t, path, []byte("changed\n"), 0600)
+				case "replacement":
+					if e := os.Rename(path, path+".original"); e != nil {
+						t.Fatal(e)
+					}
+					testWrite(t, path, f.originals["repair.intent.json"], 0600)
+				case "new_entry":
+					testWrite(t, filepath.Join(f.amendment, "authorization.intent.json"), []byte("{}\n"), 0600)
+				case "cancel":
+					cancel()
+				}
+				return check()
+			})
+			if !called || err != errRefused {
+				t.Fatal("historical drift accepted", called, err)
+			}
+		})
+	}
+}
 func TestPreparePublicationPrefixesNeverPermitRetry(t *testing.T) {
 	order := []string{"repair.intent.json", "before.json", "services/service-binding.json", "services/services-before.json", "prepare.complete.json"}
 	for n := 0; n < 5; n++ {

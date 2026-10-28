@@ -135,3 +135,141 @@ func TestExecutionPublicationDefinesFinalAcceptance(t *testing.T) {
 		t.Fatal("post-publication observation revoked accepted identity")
 	}
 }
+
+func idleControllerFixture(t *testing.T) startup {
+	t.Helper()
+	s := fixture(t)
+	write(t, s.policy, readFixturePolicy(t, s), 0644)
+	return s
+}
+
+func TestIdleControllerHoldsOriginalLockWithoutChangingState(t *testing.T) {
+	s := idleControllerFixture(t)
+	before := fileSHA(t, filepath.Join(s.state, "state.json"))
+	called := false
+	err := s.withIdleController(context.Background(), "bbbbbbbb-0000-4000-8000-000000000002", func(check func() error, _ func(func() error) error) error {
+		called = true
+		lock, err := os.Open(filepath.Join(s.state, "operation.lock"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lock.Close()
+		if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != unix.EWOULDBLOCK {
+			t.Fatalf("idle controller lock released: %v", err)
+		}
+		return check()
+	})
+	if err != nil || !called || fileSHA(t, filepath.Join(s.state, "state.json")) != before {
+		t.Fatalf("idle inspection changed or refused state: %v", err)
+	}
+}
+
+func TestIdleControllerRefusesActiveUnknownAndChangedGuard(t *testing.T) {
+	for _, kind := range []string{"active", "intent", "latch", "controller", "state", "lock", "policy", "maintenance", "pending", "provider", "config"} {
+		t.Run(kind, func(t *testing.T) {
+			s := idleControllerFixture(t)
+			expected := "bbbbbbbb-0000-4000-8000-000000000002"
+			switch kind {
+			case "active":
+				write(t, filepath.Join(s.state, "state.json"), []byte(strings.Replace(clearState, `"active":null`, `"active":`+activeState, 1)), 0600)
+			case "intent", "latch":
+				write(t, filepath.Join(s.state, "state.json"), []byte(strings.Replace(clearState, `"`+kind+`":null`, `"`+kind+`":{}`, 1)), 0600)
+			case "controller":
+				expected = "ffffffff-0000-4000-8000-000000000006"
+			}
+			err := s.withIdleController(context.Background(), expected, func(check func() error, _ func(func() error) error) error {
+				switch kind {
+				case "active", "intent", "latch", "controller":
+					t.Fatal("unsafe guard admitted")
+				case "state":
+					write(t, filepath.Join(s.state, "state.json"), append([]byte(clearState), '\n'), 0600)
+				case "lock":
+					path := filepath.Join(s.state, "operation.lock")
+					if os.Rename(path, path+".old") != nil {
+						t.Fatal("fixture rename")
+					}
+					write(t, path, nil, 0600)
+				case "policy":
+					write(t, s.policy, append(readFixturePolicy(t, s), '\n'), 0644)
+				case "maintenance":
+					write(t, s.maintenance, nil, 0600)
+				case "pending":
+					write(t, filepath.Join(s.state, "state.pending"), nil, 0600)
+				case "provider":
+					write(t, s.native, []byte("changed"), 0755)
+				case "config":
+					write(t, s.config, []byte("changed"), 0644)
+				}
+				return check()
+			})
+			if err == nil {
+				t.Fatal("unsafe or changed idle guard accepted")
+			}
+		})
+	}
+}
+
+func TestIdleControllerStartupCheckUsesPermanentLockThenReturnsIt(t *testing.T) {
+	s := idleControllerFixture(t)
+	err := s.withIdleController(context.Background(), "bbbbbbbb-0000-4000-8000-000000000002", func(check func() error, start func(func() error) error) error {
+		if err := start(func() error {
+			// Model the real ExecStartPre consumer, using the existing path and
+			// startup check rather than a replacement lock or synthetic success.
+			if stage, err := s.check(); err != nil {
+				t.Fatalf("startup check could not acquire original lock: %s %v", stage, err)
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		lock, err := os.Open(filepath.Join(s.state, "operation.lock"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lock.Close()
+		if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != unix.EWOULDBLOCK {
+			t.Fatalf("provider lease was not reacquired: %v", err)
+		}
+		if start(func() error { t.Fatal("second startup window invoked"); return nil }) == nil {
+			t.Fatal("second startup window accepted")
+		}
+		return check()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestIdleControllerStartupWindowRefusesChangedOrBusyGuard(t *testing.T) {
+	for _, kind := range []string{"changed", "busy", "lost_job"} {
+		t.Run(kind, func(t *testing.T) {
+			s := idleControllerFixture(t)
+			var contender *os.File
+			defer func() {
+				if contender != nil {
+					contender.Close()
+				}
+			}()
+			err := s.withIdleController(context.Background(), "bbbbbbbb-0000-4000-8000-000000000002", func(_ func() error, start func(func() error) error) error {
+				return start(func() error {
+					switch kind {
+					case "changed":
+						write(t, filepath.Join(s.state, "state.json"), []byte(strings.Replace(clearState, `"active":null`, `"active":`+activeState, 1)), 0600)
+					case "busy":
+						var err error
+						contender, err = os.Open(filepath.Join(s.state, "operation.lock"))
+						if err != nil || unix.Flock(int(contender.Fd()), unix.LOCK_EX|unix.LOCK_NB) != nil {
+							t.Fatal("fixture contender")
+						}
+					case "lost_job":
+						return errRefused
+					}
+					return nil
+				})
+			})
+			if err == nil {
+				t.Fatal("unknown startup window admitted")
+			}
+		})
+	}
+}

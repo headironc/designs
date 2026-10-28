@@ -213,8 +213,7 @@ func controllerProcess(proc string, pid uint32, uid uint32) error {
 	if err != nil {
 		return err
 	}
-	args := strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00")
-	if len(args) != 3 || args[0] != "/opt/nucleus-halo/bin/garm" || args[1] != "-config" || args[2] != controllerConfig {
+	if !controllerCommand(raw) {
 		return errRefused
 	}
 	after, err := readAt(dir, "stat", 8192)
@@ -226,4 +225,9 @@ func controllerProcess(proc string, pid uint32, uid uint32) error {
 		return errRefused
 	}
 	return nil
+}
+
+func controllerCommand(raw []byte) bool {
+	args := strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00")
+	return len(args) == 3 && args[0] == "/opt/nucleus-halo/bin/garm" && args[1] == "-config" && args[2] == controllerConfig
 }

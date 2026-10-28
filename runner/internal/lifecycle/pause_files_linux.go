@@ -153,6 +153,32 @@ func (s *serviceFiles) close() {
 		s.parent.Close()
 	}
 }
+
+// A credential window and its one login share an already-held global lock.
+// Duplicating the open description preserves that lease without a second flock.
+func (s *serviceFiles) sibling(slot string) (*serviceFiles, error) {
+	if slot != "window" || !s.unchanged() {
+		return nil, errRefused
+	}
+	other := &serviceFiles{files: s.files, path: filepath.Join(filepath.Dir(s.path), slot), lockPath: s.lockPath, raw: map[string][]byte{}, pinned: map[string]*os.File{}}
+	duplicate := func(f *os.File) (*os.File, error) {
+		fd, err := unix.FcntlInt(f.Fd(), unix.F_DUPFD_CLOEXEC, 0)
+		if err != nil {
+			return nil, err
+		}
+		return os.NewFile(uintptr(fd), f.Name()), nil
+	}
+	var err error
+	other.parent, err = duplicate(s.parent)
+	if err == nil {
+		other.lock, err = duplicate(s.lock)
+	}
+	if err != nil || !other.unchanged() {
+		other.close()
+		return nil, errRefused
+	}
+	return other, nil
+}
 func (s *serviceFiles) unchanged() bool {
 	info, err := s.lock.Stat()
 	for name, raw := range s.raw {

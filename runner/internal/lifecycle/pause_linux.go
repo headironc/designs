@@ -356,6 +356,7 @@ func runPause(ctx context.Context, args []string, output, diagnostic io.Writer) 
 	captureSHA := f.String("capture-sha256", "", "trusted original capture producer")
 	gh := f.String("github-token-file", "", "existing credential for a first request")
 	ga := f.String("garm-token-file", "", "existing credential for a first request")
+	sessionSHA := f.String("garm-session-sha256", "", "trusted producer of a managed GARM session")
 	if f.Parse(args) != nil || f.NArg() != 0 || *requestPath == "" || *operations == "" || !digestPattern.MatchString(*captureSHA) {
 		return fail()
 	}
@@ -365,6 +366,10 @@ func runPause(ctx context.Context, args []string, output, diagnostic io.Writer) 
 	}
 	stage = "environment"
 	if !controlledEnvironment(os.Environ()) {
+		return fail()
+	}
+	stage = "secret_process"
+	if protectSessionSecrets() != nil {
 		return fail()
 	}
 	files := protectedFiles{uid: 0, boundary: "/"}
@@ -393,7 +398,7 @@ func runPause(ctx context.Context, args []string, output, diagnostic io.Writer) 
 	}}
 	// Credential loading is lazy: existing original systemd requests can always
 	// be observed without acquiring fresh API credentials.
-	p.admission = lazyAdmission(files, *gh, *ga)
+	p.admission = sessionLiveAdmission(files, *gh, *ga, *sessionSHA)
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 	stage = "original_pause"

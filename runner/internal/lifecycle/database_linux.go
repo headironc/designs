@@ -142,12 +142,21 @@ func observeDatabase(ctx context.Context, r receipt) databaseObservation {
 }
 
 func runDatabaseChild(ctx context.Context, exe string, args []string, r receipt, uid, gid uint32) (databaseObservation, error) {
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
 	data, err := json.Marshal(r)
 	if err != nil {
 		return databaseObservation{}, err
 	}
+	raw, err := runDatabaseProcess(ctx, exe, args, data, uid, gid)
+	var result databaseObservation
+	if err != nil || strictObject(raw, &result) != nil || result.UID != uid || result.GID != gid || result.Groups == nil || len(result.Groups) != 0 {
+		return result, errRefused
+	}
+	return result, nil
+}
+
+func runDatabaseProcess(ctx context.Context, exe string, args []string, data []byte, uid, gid uint32) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
 	cmd := exec.CommandContext(ctx, exe, args...)
 	cmd.Env = []string{"PATH=/usr/bin:/bin"}
 	cmd.Dir = "/"
@@ -159,17 +168,16 @@ func runDatabaseChild(ctx context.Context, exe string, args []string, r receipt,
 	cmd.Stdout = output
 	cmd.Stderr = io.Discard
 	if cmd.Run() != nil || ctx.Err() != nil || unix.Kill(-cmd.Process.Pid, 0) != unix.ESRCH {
-		return databaseObservation{}, errRefused
+		return nil, errRefused
 	}
-	var result databaseObservation
-	if strictObject(output.Bytes(), &result) != nil || result.UID != uid || result.GID != gid || result.Groups == nil || len(result.Groups) != 0 {
-		return result, errRefused
-	}
-	return result, nil
+	return output.Bytes(), nil
 }
 
 func databaseWorker(ctx context.Context, args []string, input io.Reader, output io.Writer) int {
 	if len(args) != 0 || !controlledEnvironment(os.Environ()) {
+		return 1
+	}
+	if protectSessionSecrets() != nil {
 		return 1
 	}
 	uid, gid, err := serviceIdentity()
@@ -286,10 +294,24 @@ func (d databaseFiles) pin() (map[string]databaseObject, error) {
 }
 
 func readDatabase(ctx context.Context, files databaseFiles, r receipt) databaseObservation {
-	bad := func(code string) databaseObservation { return databaseObservation{resourceObservation: unknown(code)} }
+	var result databaseObservation
+	code := databaseSnapshot(ctx, files, func(tx *sql.Tx) error {
+		var err error
+		result, err = databaseRows(ctx, tx, r)
+		return err
+	})
+	if code != "" {
+		return databaseObservation{resourceObservation: unknown(code)}
+	}
+	return result
+}
+
+// Both job recovery and credential admission read one query-only snapshot and
+// retain the database/WAL identities until the transaction has finished.
+func databaseSnapshot(ctx context.Context, files databaseFiles, observe func(*sql.Tx) error) string {
 	before, err := files.pin()
 	if err != nil {
-		return bad("database_files")
+		return "database_files"
 	}
 	defer func() {
 		for _, o := range before {
@@ -303,39 +325,38 @@ func readDatabase(ctx context.Context, files databaseFiles, r receipt) databaseO
 	u.RawQuery = query.Encode()
 	db, err := sql.Open("sqlite", u.String())
 	if err != nil {
-		return bad("database_open")
+		return "database_open"
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(1)
 	conn, err := db.Conn(ctx)
 	if err != nil {
-		return bad("database_connect")
+		return "database_connect"
 	}
 	defer conn.Close()
 	var queryOnly int64
 	if conn.QueryRowContext(ctx, "PRAGMA query_only").Scan(&queryOnly) != nil || queryOnly != 1 {
-		return bad("database_readonly")
+		return "database_readonly"
 	}
 	tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return bad("database_transaction")
+		return "database_transaction"
 	}
 	defer tx.Rollback()
 	if err := databaseSchema(ctx, tx); err != nil {
-		return bad("database_schema")
+		return "database_schema"
 	}
-	result, err := databaseRows(ctx, tx, r)
-	if err != nil {
-		return bad("database_values")
+	if observe(tx) != nil {
+		return "database_values"
 	}
 	if ctx.Err() != nil || tx.Commit() != nil {
-		return bad("database_transaction")
+		return "database_transaction"
 	}
 	// Keep the connection alive through identity checks. SQLite may create SHM
 	// as this service user; ordinary WAL content changes do not change identity.
 	after, err := files.pin()
 	if err != nil {
-		return bad("database_files_changed")
+		return "database_files_changed"
 	}
 	defer func() {
 		for _, o := range after {
@@ -344,18 +365,18 @@ func readDatabase(ctx context.Context, files databaseFiles, r receipt) databaseO
 	}()
 	for path, o := range before {
 		if !o.unchanged() {
-			return bad("database_files_changed")
+			return "database_files_changed"
 		}
 		if _, ok := after[path]; !ok {
-			return bad("database_files_changed")
+			return "database_files_changed"
 		}
 	}
 	for _, o := range after {
 		if !o.unchanged() {
-			return bad("database_files_changed")
+			return "database_files_changed"
 		}
 	}
-	return result
+	return ""
 }
 
 type columnContract struct {
@@ -373,7 +394,11 @@ var databaseTables = map[string][]columnContract{
 }
 
 func databaseSchema(ctx context.Context, tx *sql.Tx) error {
-	for table, columns := range databaseTables {
+	return databaseColumns(ctx, tx, databaseTables)
+}
+
+func databaseColumns(ctx context.Context, tx *sql.Tx, tables map[string][]columnContract) error {
+	for table, columns := range tables {
 		var kind string
 		if tx.QueryRowContext(ctx, "SELECT type FROM sqlite_schema WHERE name=?", table).Scan(&kind) != nil || kind != "table" {
 			return errRefused

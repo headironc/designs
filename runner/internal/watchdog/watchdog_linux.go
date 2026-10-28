@@ -2,6 +2,7 @@
 package watchdog
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -35,6 +36,40 @@ type receipt struct {
 	Binding        binding `json:"binding"`
 	LoginPending   bool    `json:"login_pending"`
 	DisablePending int64   `json:"disable_pending"`
+}
+
+func decodeReceipt(raw []byte) (receipt, error) {
+	var state receipt
+	if json.Unmarshal(raw, &state) != nil || state.Version != 1 || !state.Binding.valid() || state.DisablePending < 0 || state.DisablePending > 4294967295 {
+		return receipt{}, errRefused
+	}
+	return state, nil
+}
+
+// CheckIdleState interprets a protected snapshot for credential maintenance.
+// The caller must retain the original operation lock, authenticate an
+// unambiguous policy snapshot,
+// pin absence when raw is nil, and separately reject existing stop requests.
+// It does not repair state or authorize a watchdog request.
+func CheckIdleState(raw, policy []byte, controller string) error {
+	var target binding
+	if json.Unmarshal(policy, &target) != nil || !target.valid() || target.Controller != controller {
+		return errRefused
+	}
+	if raw == nil {
+		return nil
+	}
+	state, err := decodeReceipt(raw)
+	if err != nil || state.Binding != target || state.LoginPending || state.DisablePending != 0 {
+		return errRefused
+	}
+	// atomicJSON writes this exact encoding without a trailing newline. A
+	// partial, aliased or duplicate-field state is not that producer's receipt.
+	expected, err := json.Marshal(state)
+	if err != nil || !bytes.Equal(raw, expected) {
+		return errRefused
+	}
+	return nil
 }
 
 type observer struct {
@@ -120,7 +155,8 @@ func (o *observer) observe(ctx context.Context) (string, error) {
 	state := receipt{Version: 1}
 	raw, err := readProtected(filepath.Join(o.dir, "state.json"), o.uid, 0600, 8192)
 	if err == nil {
-		if json.Unmarshal(raw, &state) != nil || state.Version != 1 || !state.Binding.valid() || state.DisablePending < 0 || state.DisablePending > 4294967295 {
+		state, err = decodeReceipt(raw)
+		if err != nil {
 			return "state", errRefused
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
