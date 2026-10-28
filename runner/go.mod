@@ -9,7 +9,7 @@ require (
 	github.com/cloudbase/garm-provider-common v0.1.9
 	github.com/coreos/go-systemd/v22 v22.7.0
 	github.com/go-openapi/runtime v0.29.5
-	github.com/godbus/dbus/v5 v5.1.0
+	github.com/godbus/dbus/v5 v5.2.4
 	github.com/google/go-github/v84 v84.0.0
 	golang.org/x/sys v0.49.0
 	modernc.org/sqlite v1.61.0
@@ -21,7 +21,7 @@ require (
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/flosch/pongo2 v0.0.0-20200913210552-0d938eb266f3 // indirect
-	github.com/go-jose/go-jose/v4 v4.1.5 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.6 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-openapi/analysis v0.25.0 // indirect
