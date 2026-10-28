@@ -270,6 +270,9 @@ func (c capture) execute(ctx context.Context, requestPath, operations string) (s
 // Run exposes a fixed production observation route. Test endpoints and fixture
 // roots are private implementation inputs, never flags or environment settings.
 func Run(ctx context.Context, args []string, output, diagnostic io.Writer) int {
+	if len(args) > 0 && args[0] == "inspect-installed" {
+		return runInstalled(ctx, args[1:], output, diagnostic)
+	}
 	if len(args) > 0 && args[0] == "inspect-prepare" {
 		return runPrepare(ctx, args[1:], output, diagnostic)
 	}
