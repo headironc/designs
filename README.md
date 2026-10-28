@@ -70,7 +70,7 @@ lychee 在独立控制目录运行，并使用显式空配置。固定参数强�
 
 ## Go 依赖漏洞检查
 
-漏洞检查与完整 Go 测试分别运行。[原生 Go 工作流](.github/workflows/go.yml)中的独立 job 使用同一命令，不需要 Docker、nft 或 runner 服务。环境为 Linux amd64、可用的 `/proc/self/fd`、Node/Bun 和完整 Go 1.27.3 SDK。SDK 可通过当前 `PATH` 或 `DESIGNS_GO_BIN` 指定，工具会核对版本。首次运行先显式准备：
+漏洞检查与完整 Go 测试分别运行。[原生 Go 工作流](.github/workflows/go.yml)中的 `vulnerabilities` job 使用 `ubuntu-latest`，与本地执行同一命令。漏洞扫描不需要 Docker、nft、私有 user/network namespace 或 runner 服务，因此无需沿用测试 job 的 Ubuntu 22.04 限制。环境为 Linux amd64、可用的 `/proc/self/fd`、Node/Bun 和完整 Go 1.27.3 SDK。SDK 可通过当前 `PATH` 或 `DESIGNS_GO_BIN` 指定，工具会核对版本。首次运行先显式准备：
 
 ```sh
 bun install --frozen-lockfile --ignore-scripts
@@ -78,6 +78,8 @@ bun run go:vuln:prepare
 bun run test:go-vuln
 bun run go:vuln:check
 ```
+
+[Dependabot 告警](https://docs.github.com/en/code-security/concepts/supply-chain-security/dependabot-alerts)检查默认分支的依赖图，依据 GitHub Advisory Database 生成告警。查看本仓库的 [Security → Dependabot](https://github.com/headironc/designs/security/dependabot)。告警由仓库平台设置启用，本工作流不会自动开启该设置，也不会自动启用依赖升级 PR。本地和 PR 中保留 [govulncheck 调用图检查](https://go.dev/doc/security/vuln/)，用于分析当前候选的 Go 函数可达性。两者范围不同，任何一项无告警都不保证所有依赖安全。
 
 `go:vuln:prepare` 通过 `proxy.golang.org` 与 `sum.golang.org` 构建固定的 `govulncheck v1.9.0`，并下载 runner 锁定模块。构建使用 Go 1.27.3、Linux amd64、`GOAMD64=v1`、`CGO_ENABLED=0`、`-trimpath` 和 `-buildvcs=false`。唯一工具声明位于 [go-vuln.ts](scripts/go-vuln.ts)，包含固定二进制 SHA-256；版本输出不能替代字节校验。下载、构建、校验和收尾成功后才原子替换工具，准备失败保留旧安装和本次日志。准备不会下载 SDK、拉取镜像或修改用户配置，也不代表扫描通过。
 
@@ -99,7 +101,7 @@ CLI 退出 0 表示所选源码图没有可达发现，退出 1 表示原生扫�
 
 [原生 Go 工作流](.github/workflows/go.yml)与本地使用同一个入口。运行环境为满足以下条件的 Linux amd64，不是任意 Linux 宿主。Node/Bun 版本见根 manifest，完整 Go SDK 版本见 `runner/go.mod`。另准备 GCC、`dbus-daemon`、Docker daemon、`unshare` 和 `/usr/sbin/nft`。真实进程测试要求非根 unified cgroup。nft 测试要求允许创建私有 user/network namespace。缺条件会失败，不将 skip 解释为通过。本地命令不安装包、修改服务或安全策略。
 
-Go 工作流固定使用 GitHub hosted `ubuntu-22.04`，在一次性 job 中用 apt 准备系统工具。随后以普通用户执行 `unshare --user --map-root-user --net /bin/true` 预检，失败就停止。Ubuntu 24.04 及后续版本默认限制无特权 user namespace，不能假定 `ubuntu-latest` 满足上述条件。不要用 sudo 运行测试，也不要修改 sysctl 或 AppArmor 来绕过拒绝。升级 runner 环境时重新验证 module、container 和 nft 三层；旧环境或部分层成功不证明新环境完整可用。平台支持范围见 [GitHub hosted runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)，发行版限制见 [Docker rootless 故障说明](https://docs.docker.com/engine/security/rootless/troubleshoot/)。
+完整测试的 `go` job 固定使用 GitHub hosted `ubuntu-22.04`，在一次性 job 中用 apt 准备系统工具。随后以普通用户执行 `unshare --user --map-root-user --net /bin/true` 预检，失败就停止。Ubuntu 24.04 及后续版本默认限制无特权 user namespace，不能假定 `ubuntu-latest` 满足上述条件。不要用 sudo 运行测试，也不要修改 sysctl 或 AppArmor 来绕过拒绝。升级 runner 环境时重新验证 module、container 和 nft 三层；旧环境或部分层成功不证明新环境完整可用。平台支持范围见 [GitHub hosted runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)，发行版限制见 [Docker rootless 故障说明](https://docs.docker.com/engine/security/rootless/troubleshoot/)。
 
 Go SDK 下载与模块准备分开。先按 [runner 工具链说明](runner/README.md#构建与检查)验证官方归档摘要。完整解包到临时或忽略目录，再将 `bin` 加入当前 shell 的 `PATH`。不要用仅含 `go`/`gofmt` 的格式工具目录编译。随后在仓库根运行：
 
