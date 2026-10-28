@@ -52,5 +52,5 @@ jobs:
           include-hidden-files: true
           path: |
             runner/.build/go-check-*/*.log
-            runner/.build/go-check-*/container-name.txt
-            runner/.build/go-check-*/container-test-output.txt
+            runner/.build/go-check-*/container-*-name.txt
+            runner/.build/go-check-*/container-*-test-output.txt

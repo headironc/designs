@@ -26,6 +26,75 @@ const cli = path.join(import.meta.dirname, "go-check.ts");
 const lifecycle = "github.com/headironc/designs/runner/internal/lifecycle";
 const processTest = "TestActualProcessIdentityAndExit";
 const privateTest = "TestDatabaseChildInPrivateContainer";
+const rootInstalled = [
+  "TestInstalledHistoricalMatchAndReadOnlyReentry",
+  ...[
+    "content",
+    "size",
+    "mode",
+    "special_mode",
+    "gid",
+    "uid",
+    "missing",
+    "symlink",
+    "hardlink",
+    "fifo",
+    "parent",
+    "xattr",
+  ].map((name) => `TestInstalledFileStates/${name}`),
+  ...[
+    "lock_missing",
+    "lock_busy",
+    "lock_link",
+    "lock_mode",
+    "plan_missing",
+    "plan_digest",
+    "plan_null",
+    "plan_extra",
+    "plan_xattrs",
+    "producer",
+  ].map((name) => `TestInstalledInputsBlockFileReads/${name}`),
+  ...[
+    "replace",
+    "same_size",
+    "appear",
+    "xattr",
+    "parent_replace",
+    "plan_change",
+    "lock_replace",
+    "cancel",
+    "fifo_open_race",
+  ].map((name) => `TestInstalledConcurrentChangesAndCancellation/${name}`),
+];
+const ordinaryInstalled = [
+  "TestInstalledFileStates",
+  "TestInstalledInputsBlockFileReads",
+  "TestInstalledConcurrentChangesAndCancellation",
+  "TestInstalledStreamingBoundsAndPrivateFiles",
+  "TestInstalledCLIAndOutputBoundary",
+];
+
+function installedEvents(
+  privateContainer: boolean,
+): { Action: string; Package: string; Test: string }[] {
+  return [...rootInstalled, ...ordinaryInstalled].flatMap((name) => [
+    { Action: "run", Package: lifecycle, Test: name },
+    {
+      Action:
+        !privateContainer && rootInstalled.includes(name) ? "skip" : "pass",
+      Package: lifecycle,
+      Test: name,
+    },
+  ]);
+}
+
+function containerOutput(race: boolean): string {
+  return (
+    [...(race ? [] : [privateTest]), ...rootInstalled, ...ordinaryInstalled]
+      .map((name) => `=== RUN   ${name}\n--- PASS: ${name} (0.00s)\n`)
+      .join("") + "PASS\n"
+  );
+}
 
 function fixture(t: TestContext): string {
   mkdirSync(path.join(repository, ".cache"), { recursive: true });
@@ -41,6 +110,7 @@ function events(processAction = "pass", extraSkip = false): string {
     { Action: processAction, Package: lifecycle, Test: processTest },
     { Action: "run", Package: lifecycle, Test: privateTest },
     { Action: "skip", Package: lifecycle, Test: privateTest },
+    ...installedEvents(false),
     ...(extraSkip
       ? [{ Action: "skip", Package: lifecycle, Test: "NewUncoveredTest" }]
       : []),
@@ -98,6 +168,107 @@ test("Go events require actual process execution and reject unknown skips, absen
   );
   for (const stage of ["container", "nft"] as const)
     assert.throws(() => verifyTestEvents(events(), stage));
+});
+
+test("installed fixtures require exact module skips and complete normal/race passes", () => {
+  const serialized = (items: unknown[]) =>
+    items.map((item) => JSON.stringify(item)).join("\n") + "\n";
+  const installed = installedEvents(true);
+  const passed = { Action: "pass", Package: lifecycle };
+  const database = [
+    { Action: "run", Package: lifecycle, Test: privateTest },
+    { Action: "pass", Package: lifecycle, Test: privateTest },
+  ];
+  verifyTestEvents(
+    serialized([...database, ...installed, passed]),
+    "container",
+  );
+  verifyTestEvents(serialized([...installed, passed]), "container-race");
+  assert.throws(
+    () => verifyTestEvents(serialized([...installed, passed]), "container"),
+    /Required Go test/,
+  );
+  assert.throws(
+    () =>
+      verifyTestEvents(
+        events() +
+          serialized([
+            {
+              Action: "skip",
+              Package: lifecycle,
+              Test: "TestInstalledFileStates/new_case",
+            },
+          ]),
+        "module",
+      ),
+    /Unexpected skipped test/,
+  );
+  assert.throws(
+    () =>
+      verifyTestEvents(
+        events().replace(
+          '"Action":"pass","Package":"' +
+            lifecycle +
+            '","Test":"TestInstalledStreamingBoundsAndPrivateFiles"',
+          '"Action":"skip","Package":"' +
+            lifecycle +
+            '","Test":"TestInstalledStreamingBoundsAndPrivateFiles"',
+        ),
+        "module",
+      ),
+    /Unexpected skipped test/,
+  );
+  for (const stage of ["container", "container-race"] as const) {
+    const input = [
+      ...(stage === "container" ? database : []),
+      ...installed,
+      passed,
+    ];
+    assert.throws(
+      () =>
+        verifyTestEvents(
+          serialized(
+            input.filter(
+              (event) =>
+                !("Test" in event) ||
+                event.Test !== "TestInstalledFileStates/xattr",
+            ),
+          ),
+          stage,
+        ),
+      /Required Go test/,
+    );
+    assert.throws(
+      () =>
+        verifyTestEvents(
+          serialized([
+            ...input,
+            {
+              Action: "skip",
+              Package: lifecycle,
+              Test: "TestInstalledFileStates/content",
+            },
+          ]),
+          stage,
+        ),
+      /Unexpected skipped test/,
+    );
+    assert.throws(
+      () =>
+        verifyTestEvents(
+          serialized([
+            ...input,
+            {
+              Action: "pass",
+              Package: lifecycle,
+              Test: "TestInstalledCLIAndOutputBoundary",
+            },
+          ]),
+          stage,
+        ),
+      /exactly once/,
+    );
+  }
 });
 
 test("command timeout escalates and cancellation reaps the command's real child", async (t) => {
@@ -409,8 +580,14 @@ function fakeGo(
       process.exit(result.status ?? 1);
     }
     if (args[0] === "test" && args.includes("-c")) {
+      if (${JSON.stringify(mode)} === "container-pass" && args.includes("-race")) {
+        const source = ${JSON.stringify("#include <stdio.h>\nint main(void) { fputs(" + JSON.stringify(containerOutput(true)) + ", stdout); return 0; }\n")};
+        const result = require("node:child_process").spawnSync("gcc", ["-x", "c", "-o", args[args.indexOf("-o")+1], "-"], {input:source,encoding:"utf8"});
+        if (result.stderr) process.stderr.write(result.stderr);
+        process.exit(result.status ?? 1);
+      }
       const body = ${JSON.stringify(mode)} === "container-pass"
-        ? "#!/bin/sh\\nprintf '=== RUN   TestDatabaseChildInPrivateContainer\\n--- PASS: TestDatabaseChildInPrivateContainer (0.00s)\\nPASS\\n'\\n"
+        ? ${JSON.stringify("#!/bin/sh\nprintf '%s' '" + containerOutput(false) + "'\n")}
         : "#!/bin/sh\\nprintf 'private container started before cancellation\\n'\\nexec sleep 120\\n";
       fs.writeFileSync(args[args.indexOf("-o")+1], body, {mode:0o755}); process.exit(0);
     }
@@ -743,7 +920,10 @@ test("create uncertainty stays unknown and lost replies are resolved against the
     try {
       assert.ifError(result.error);
       assert.ok(name, result.stdout + result.stderr);
-      assert.equal(readFileSync(count, "utf8").trim().split("\n").length, 1);
+      assert.equal(
+        readFileSync(count, "utf8").trim().split("\n").length,
+        mode === "rm-unknown" ? 2 : 1,
+      );
       if (mode === "create-unknown") {
         assert.equal(result.status, 1, result.stdout + result.stderr);
         assert.match(result.stderr, /creation outcome unknown/);
@@ -794,7 +974,10 @@ test("create uncertainty stays unknown and lost replies are resolved against the
         assert.match(result.stdout, /Private container absent/);
       }
     } finally {
-      if (name) cleanupContainer(name, dockerExecutable);
+      for (const match of result.stdout.matchAll(
+        /Private container handle: (designs-go-[a-f0-9-]+)/g,
+      ))
+        cleanupContainer(match[1]!, dockerExecutable);
     }
   }
 });
@@ -842,7 +1025,10 @@ test("failed container wait retains terminal logs and reports log failures witho
         )?.[1];
         assert.ok(work, result.stdout);
         assert.match(
-          readFileSync(path.join(work, "container-test-output.txt"), "utf8"),
+          readFileSync(
+            path.join(work, "container-normal-test-output.txt"),
+            "utf8",
+          ),
           /PASS: TestDatabaseChildInPrivateContainer/,
         );
       }
@@ -1085,7 +1271,10 @@ test("CLI cancellation and forced termination leave no owned Docker fixture", as
         const work = /Go check logs and artifacts: (.+)/.exec(output)?.[1];
         assert.ok(work, output);
         assert.match(
-          readFileSync(path.join(work, "container-test-output.txt"), "utf8"),
+          readFileSync(
+            path.join(work, "container-normal-test-output.txt"),
+            "utf8",
+          ),
           /private container started before cancellation/,
         );
         assert.equal(

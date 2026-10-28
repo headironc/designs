@@ -20,6 +20,56 @@ const lifecycle = "github.com/headironc/designs/runner/internal/lifecycle";
 const firewall = "github.com/headironc/designs/runner/internal/firewall";
 const privateTest = "TestDatabaseChildInPrivateContainer";
 const processTest = "TestActualProcessIdentityAndExit";
+const installedGroups = {
+  TestInstalledFileStates: [
+    "content",
+    "size",
+    "mode",
+    "special_mode",
+    "gid",
+    "uid",
+    "missing",
+    "symlink",
+    "hardlink",
+    "fifo",
+    "parent",
+    "xattr",
+  ],
+  TestInstalledInputsBlockFileReads: [
+    "lock_missing",
+    "lock_busy",
+    "lock_link",
+    "lock_mode",
+    "plan_missing",
+    "plan_digest",
+    "plan_null",
+    "plan_extra",
+    "plan_xattrs",
+    "producer",
+  ],
+  TestInstalledConcurrentChangesAndCancellation: [
+    "replace",
+    "same_size",
+    "appear",
+    "xattr",
+    "parent_replace",
+    "plan_change",
+    "lock_replace",
+    "cancel",
+    "fifo_open_race",
+  ],
+};
+const installedRoots = [
+  "TestInstalledHistoricalMatchAndReadOnlyReentry",
+  ...Object.entries(installedGroups).flatMap(([group, names]) =>
+    names.map((name) => `${group}/${name}`),
+  ),
+];
+const installedOrdinary = [
+  ...Object.keys(installedGroups),
+  "TestInstalledStreamingBoundsAndPrivateFiles",
+  "TestInstalledCLIAndOutputBoundary",
+];
 // Official Ubuntu 26.04 linux/amd64 manifest, consumed only by the private fixture.
 const image =
   "ubuntu@sha256:157dc3d6e4a3e4f2c68d12df9df9ed6e808b59af6d4c3757b432b4f519916725";
@@ -308,7 +358,7 @@ export async function runCommand(
 /** Check Go's actual event stream; an omitted, skipped or duplicate required test fails. */
 export function verifyTestEvents(
   raw: string,
-  stage: Stage,
+  stage: Stage | "container-race",
   packagesWithoutTests: string[] = [],
 ): void {
   const required =
@@ -316,9 +366,20 @@ export function verifyTestEvents(
       ? [
           [lifecycle, processTest, "pass"],
           [lifecycle, privateTest, "skip"],
+          ...installedRoots.map((name) => [lifecycle, name, "skip"]),
+          ...installedOrdinary.map((name) => [lifecycle, name, "pass"]),
         ]
-      : stage === "container"
-        ? [[lifecycle, privateTest, "pass"]]
+      : stage === "container" || stage === "container-race"
+        ? [
+            ...(stage === "container"
+              ? [[lifecycle, privateTest, "pass"]]
+              : []),
+            ...[...installedRoots, ...installedOrdinary].map((name) => [
+              lifecycle,
+              name,
+              "pass",
+            ]),
+          ]
         : [[firewall, "TestReloadInPrivateNamespace", "pass"]];
   const runs = new Map<string, number>();
   const finals = new Map<string, string[]>();
@@ -348,7 +409,7 @@ export function verifyTestEvents(
       !(
         stage === "module" &&
         event.Package === lifecycle &&
-        event.Test === privateTest
+        (event.Test === privateTest || installedRoots.includes(event.Test))
       )
     )
       throw new Error(`Unexpected skipped test: ${key}`);
@@ -472,6 +533,10 @@ export async function checkGo(
     for (const stage of mode) {
       signal.throwIfAborted();
       if (stage === "module") {
+        if (process.getuid?.() === 0)
+          throw new Error(
+            "Module tests require a non-root host user; root fixtures run only in private containers",
+          );
         await run("dbus-daemon", ["--version"]);
         await run("gcc", ["--version"]);
         await run("go", ["mod", "verify"]);
@@ -535,184 +600,211 @@ export async function checkGo(
           );
       } else if (stage === "container") {
         await run("docker", ["image", "inspect", image]);
-        const executable = path.join(work, "lifecycle.test");
-        await run(
-          "go",
-          ["test", "-c", "-o", executable, "./internal/lifecycle"],
-          { env: { ...env, CGO_ENABLED: "0" }, timeoutMs: 600_000 },
-        );
-        const name = `designs-go-${randomUUID()}`;
-        writeFileSync(path.join(work, "container-name.txt"), name + "\n", {
-          mode: 0o600,
-        });
-        console.log(`Private container handle: ${name}`);
-        const docker = (values: string[], cleanup = false) =>
-          run("docker", values, { timeoutMs: 30_000, cleanup });
-        const findContainer = async () =>
-          (
-            await docker(
-              [
-                "container",
-                "ls",
-                "--all",
-                "--no-trunc",
-                "--filter",
-                `name=^/${name}$`,
-                "--format",
-                "{{.ID}}",
-              ],
-              true,
-            )
-          ).trim();
-        const state = async (id: string) =>
-          JSON.parse(
-            await docker(["inspect", "--format", "{{json .State}}", id], true),
-          ) as { Running: boolean; Status: string; ExitCode: number };
-        let createStarted = false;
-        let createConfirmed = false;
-        let exit: string | undefined;
-        let raw: string | undefined;
-        const containerFailures: unknown[] = [];
-        try {
-          try {
-            createStarted = true;
-            await docker([
-              "create",
-              "--name",
-              name,
-              "--pull=never",
-              "--network=none",
-              "--mount",
-              `type=bind,src=${executable},dst=/input/lifecycle.test,readonly`,
-              "--env",
-              "RUNNER_DIAGNOSTIC_PRIVATE_CONTAINER=1",
-              image,
-              "/bin/sh",
-              "-eu",
+        for (const variant of ["normal", "race"] as const) {
+          const executable = path.join(work, `lifecycle-${variant}.test`);
+          await run(
+            "go",
+            [
+              "test",
+              ...(variant === "race" ? ["-race"] : []),
               "-c",
-              "printf 'nucleiron:x:24568:\\n' >> /etc/group\nprintf 'nucleiron:x:24567:24568::/nonexistent:/bin/false\\n' >> /etc/passwd\ncp /input/lifecycle.test /tmp/lifecycle.test\nchmod 755 /tmp/lifecycle.test\nexec /tmp/lifecycle.test -test.v=test2json -test.timeout=30s -test.run=^TestDatabaseChildInPrivateContainer$",
-            ]);
-            createConfirmed = true;
-          } catch (error) {
-            if (error instanceof CommandFailure && !error.started)
-              createStarted = false;
-            throw error;
-          }
-          await docker(["start", name]);
-          exit = (await docker(["wait", name])).trim();
-        } catch (error) {
-          containerFailures.push(error);
-        } finally {
+              "-o",
+              executable,
+              "./internal/lifecycle",
+            ],
+            {
+              env: { ...env, CGO_ENABLED: variant === "race" ? "1" : "0" },
+              timeoutMs: 600_000,
+            },
+          );
+          const name = `designs-go-${randomUUID()}`;
+          writeFileSync(
+            path.join(work, `container-${variant}-name.txt`),
+            name + "\n",
+            {
+              mode: 0o600,
+            },
+          );
+          console.log(`Private container handle: ${name}`);
+          const docker = (values: string[], cleanup = false) =>
+            run("docker", values, { timeoutMs: 30_000, cleanup });
+          const findContainer = async () =>
+            (
+              await docker(
+                [
+                  "container",
+                  "ls",
+                  "--all",
+                  "--no-trunc",
+                  "--filter",
+                  `name=^/${name}$`,
+                  "--format",
+                  "{{.ID}}",
+                ],
+                true,
+              )
+            ).trim();
+          const state = async (id: string) =>
+            JSON.parse(
+              await docker(
+                ["inspect", "--format", "{{json .State}}", id],
+                true,
+              ),
+            ) as { Running: boolean; Status: string; ExitCode: number };
+          let createStarted = false;
+          let createConfirmed = false;
+          let exit: string | undefined;
+          let raw: string | undefined;
+          const containerFailures: unknown[] = [];
           try {
-            // Create/start can have succeeded even when their client returned an error.
-            // Recover only this pre-recorded name; never repeat creation or start.
-            const id = await findContainer();
-            if (!id && createStarted && !createConfirmed)
-              throw new Error(
-                `Container creation outcome unknown: ${name}; currently absent does not prove creation ended. Retain ${work} and resolve this original name before retrying.`,
-              );
-            if (id) {
-              let current = await state(id);
-              if (current.Running) {
-                try {
-                  await docker(["stop", "--time=2", id], true);
-                } catch (error) {
-                  console.error(
-                    `Stop result requires readback for ${id}: ${String(error)}`,
-                  );
-                }
-                current = await state(id);
+            try {
+              createStarted = true;
+              await docker([
+                "create",
+                "--name",
+                name,
+                "--pull=never",
+                "--network=none",
+                "--mount",
+                `type=bind,src=${executable},dst=/input/lifecycle.test,readonly`,
+                "--env",
+                "RUNNER_DIAGNOSTIC_PRIVATE_CONTAINER=1",
+                image,
+                "/bin/sh",
+                "-eu",
+                "-c",
+                `printf 'nucleiron:x:24568:\\n' >> /etc/group\nprintf 'nucleiron:x:24567:24568::/nonexistent:/bin/false\\n' >> /etc/passwd\ncp /input/lifecycle.test /tmp/lifecycle.test\nchmod 755 /tmp/lifecycle.test\n${variant === "race" ? "/lib64/ld-linux-x86-64.so.2 --list /tmp/lifecycle.test >&2\n" : ""}exec /tmp/lifecycle.test -test.v=test2json -test.timeout=1m '-test.run=${variant === "race" ? "^TestInstalled" : "^(TestDatabaseChildInPrivateContainer$|TestInstalled)"}'`,
+              ]);
+              createConfirmed = true;
+            } catch (error) {
+              if (error instanceof CommandFailure && !error.started)
+                createStarted = false;
+              throw error;
+            }
+            await docker(["start", name]);
+            exit = (await docker(["wait", name])).trim();
+          } catch (error) {
+            containerFailures.push(error);
+          } finally {
+            try {
+              // Create/start can have succeeded even when their client returned an error.
+              // Recover only this pre-recorded name; never repeat creation or start.
+              const id = await findContainer();
+              if (!id && createStarted && !createConfirmed)
+                throw new Error(
+                  `Container creation outcome unknown: ${name}; currently absent does not prove creation ended. Retain ${work} and resolve this original name before retrying.`,
+                );
+              if (id) {
+                let current = await state(id);
                 if (current.Running) {
                   try {
-                    await docker(["kill", id], true);
+                    await docker(["stop", "--time=2", id], true);
                   } catch (error) {
                     console.error(
-                      `Kill result requires readback for ${id}: ${String(error)}`,
+                      `Stop result requires readback for ${id}: ${String(error)}`,
                     );
                   }
                   current = await state(id);
+                  if (current.Running) {
+                    try {
+                      await docker(["kill", id], true);
+                    } catch (error) {
+                      console.error(
+                        `Kill result requires readback for ${id}: ${String(error)}`,
+                      );
+                    }
+                    current = await state(id);
+                  }
                 }
-              }
-              if (
-                current.Running ||
-                !["exited", "created", "dead"].includes(current.Status)
-              )
-                throw new Error(
-                  `Container ${id} is not terminal; retain ${work} and resolve it before retrying`,
-                );
-              console.log(
-                `Container terminal: ${id} ${current.Status} exit=${current.ExitCode}`,
-              );
-              try {
-                raw = await docker(["logs", id], true);
-                writeFileSync(
-                  path.join(work, "container-test-output.txt"),
-                  raw,
-                  {
-                    mode: 0o600,
-                  },
-                );
-              } catch (error) {
-                containerFailures.push(
-                  new Error(
-                    `Container diagnostics failed for ${name}/${id}: ${String(error)}`,
-                    { cause: error },
-                  ),
-                );
-              }
-              let removalError: unknown;
-              try {
-                await docker(["rm", id], true);
-              } catch (error) {
-                removalError = error;
-              }
-              const remainingId = (
-                await docker(
-                  [
-                    "container",
-                    "ls",
-                    "--all",
-                    "--no-trunc",
-                    "--filter",
-                    `id=${id}`,
-                    "--format",
-                    "{{.ID}}",
-                  ],
-                  true,
+                if (
+                  current.Running ||
+                  !["exited", "created", "dead"].includes(current.Status)
                 )
-              ).trim();
-              if (remainingId || (await findContainer()))
-                throw new Error(
-                  `Container ${name}/${id} removal unresolved: ${String(removalError ?? "still present")}; retain ${work}`,
-                );
-              if (removalError)
+                  throw new Error(
+                    `Container ${id} is not terminal; retain ${work} and resolve it before retrying`,
+                  );
                 console.log(
-                  `Removal confirmed by readback after client error: ${id}`,
+                  `Container terminal: ${id} ${current.Status} exit=${current.ExitCode}`,
                 );
+                try {
+                  raw = await docker(["logs", id], true);
+                  writeFileSync(
+                    path.join(work, `container-${variant}-test-output.txt`),
+                    raw,
+                    {
+                      mode: 0o600,
+                    },
+                  );
+                } catch (error) {
+                  containerFailures.push(
+                    new Error(
+                      `Container diagnostics failed for ${name}/${id}: ${String(error)}`,
+                      { cause: error },
+                    ),
+                  );
+                }
+                let removalError: unknown;
+                try {
+                  await docker(["rm", id], true);
+                } catch (error) {
+                  removalError = error;
+                }
+                const remainingId = (
+                  await docker(
+                    [
+                      "container",
+                      "ls",
+                      "--all",
+                      "--no-trunc",
+                      "--filter",
+                      `id=${id}`,
+                      "--format",
+                      "{{.ID}}",
+                    ],
+                    true,
+                  )
+                ).trim();
+                if (remainingId || (await findContainer()))
+                  throw new Error(
+                    `Container ${name}/${id} removal unresolved: ${String(removalError ?? "still present")}; retain ${work}`,
+                  );
+                if (removalError)
+                  console.log(
+                    `Removal confirmed by readback after client error: ${id}`,
+                  );
+              }
+              console.log(`Private container absent: ${name}`);
+            } catch (error) {
+              containerFailures.push(error);
             }
-            console.log(`Private container absent: ${name}`);
-          } catch (error) {
-            containerFailures.push(error);
           }
-        }
-        if (containerFailures.length === 1) throw containerFailures[0];
-        if (containerFailures.length > 1)
-          throw new AggregateError(
-            containerFailures,
-            containerFailures
-              .map((error) =>
-                error instanceof Error ? error.message : String(error),
-              )
-              .join("\n"),
+          if (containerFailures.length === 1) throw containerFailures[0];
+          if (containerFailures.length > 1)
+            throw new AggregateError(
+              containerFailures,
+              containerFailures
+                .map((error) =>
+                  error instanceof Error ? error.message : String(error),
+                )
+                .join("\n"),
+            );
+          if (raw === undefined)
+            throw new Error(`Container diagnostics unavailable: ${name}`);
+          const events = await run(
+            "go",
+            ["tool", "test2json", "-p", lifecycle],
+            {
+              input: raw,
+            },
           );
-        if (raw === undefined)
-          throw new Error(`Container diagnostics unavailable: ${name}`);
-        const events = await run("go", ["tool", "test2json", "-p", lifecycle], {
-          input: raw,
-        });
-        verifyTestEvents(events, stage);
-        if (exit !== "0")
-          throw new Error(`Private container ${name} exited ${exit}`);
+          verifyTestEvents(
+            events,
+            variant === "race" ? "container-race" : "container",
+          );
+          if (exit !== "0")
+            throw new Error(`Private container ${name} exited ${exit}`);
+          console.log(`Go container variant passed: ${variant}`);
+        }
       } else {
         const raw = await run(
           "go",

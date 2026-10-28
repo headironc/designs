@@ -64,9 +64,11 @@ bun run go:check
 
 `go:prepare` 通过官方模块代理和校验数据库下载锁定依赖。它还拉取脚本固定 digest 的 Ubuntu 26.04 Linux amd64 夹具镜像。准备成功不代表检查通过。检查阶段关闭 Go 网络代理与校验数据库。Docker 只消费已有镜像，不自动联网补装工具。Go 使用 `GOTOOLCHAIN=local`、`GOWORK=off`、`GOENV=off` 和 `GOFLAGS=-mod=readonly`，前后确认 `go.mod`/`go.sum` 未改变。继承的 `GO*` 设置与 `RUNNER_*`、`GUARD_*`、`WATCHDOG_STOP_*` 夹具开关会被清除，再按对应层设置。外部环境不能启用测试 helper 或指定它们的状态目录与 D-Bus。
 
-默认 `go:check` 依次完成 module、container 和 nft 三层，全部通过才输出完整成功。module 运行 `go mod verify`、全模块 `go test -race -count=1`、`go vet` 和五个命令的 `CGO_ENABLED=0` Linux amd64 构建。测试使用真实私有 D-Bus。Go JSON 事件必须证明实际进程身份测试执行并通过。普通层唯一允许跳过的测试是另行隔离运行的容器用例。没有测试文件的包由 `go list` 明确识别，其他测试或包的 skip 均失败。必需测试必须恰好运行一次并给出预期终态，缺失或重复均失败。
+默认 `go:check` 依次完成 module、container 和 nft 三层，全部通过才输出完整成功。module 要求非 root 宿主用户，运行 `go mod verify`、全模块 `go test -race -count=1`、`go vet` 和五个命令的 `CGO_ENABLED=0` Linux amd64 构建。测试使用真实私有 D-Bus。Go JSON 事件必须证明实际进程身份测试执行并通过。普通层仅允许数据库降权用例、installed 历史匹配用例及明确登记的 31 个 root 子用例 skip。installed 的其余五个父级用例必须 pass。没有测试文件的包由 `go list` 明确识别，未登记测试或包的 skip 均失败。必需测试必须恰好运行一次并给出预期终态，缺失或重复均失败。
 
-container 层使用静态 lifecycle 测试产物。只读挂入一次性无网络容器后，复制到可替换的 `/tmp/lifecycle.test`。容器中创建 UID 24567/GID 24568 的私有 NSS fixture。数据库目录初始不存在，不挂业务 socket、数据库或凭据。原 [降权用例](runner/closure.md#验证与后续边界)必须真实通过，日志由 Go `test2json` 转成事件验证。nft 层沿 [原 namespace 测试](runner/README.md#构建与检查)在内部执行 `unshare`。核网络 namespace 已改变后才调用 nft。它不在宿主加载规则，也不运行 runner 服务或安装 unit。
+container 层按 normal、race 顺序使用两个独立的一次性无网络容器。normal 静态产物执行原 [数据库降权用例](runner/closure.md#验证与后续边界)及全部 `TestInstalled*`；race 产物按 [installed 验证合同](runner/installed-evidence.md#未观察事实与验证)执行全部 `TestInstalled*`。两份事件分别要求六个 installed 父级及 31 个子用例真实 pass，normal 还必须证明数据库用例通过。normal 失败就结束，不启动 race 掩盖失败。
+
+每个容器只读挂入本次 lifecycle 测试产物，再复制到可替换的 `/tmp/lifecycle.test`。容器中创建 UID 24567/GID 24568 的私有 NSS fixture。数据库目录初始不存在，不挂业务 socket、数据库或凭据。race 容器先用 `/lib64/ld-linux-x86-64.so.2 --list` 核动态依赖，再执行真实用例。缺 loader/libc 时保留失败，不换镜像或联网补装。日志由 Go `test2json` 转成事件验证。nft 层沿 [原 namespace 测试](runner/README.md#构建与检查)在内部执行 `unshare`。核网络 namespace 已改变后才调用 nft。它不在宿主加载规则，也不运行 runner 服务或安装 unit。
 
 编译缓存和日志放在忽略的 `runner/.build/`。测试使用本次创建的短真实 `/tmp/dg-*` 目录。Go 1.27 的 `testing.T.TempDir` 优先使用 `GOTMPDIR`。`go test -exec` 仅对测试进程切换到短路径，大编译目录仍留在工作树。子进程使用 umask `022`，让现有夹具的准确权限合同成立。CLI 只在同步 spawn 窗口设置并立即恢复父进程 umask，不改变宿主配置。日志与容器句柄显式使用 `0600`。
 
@@ -78,4 +80,4 @@ CLI 为每条命令保留日志。准备总期限为 20 分钟，检查为 30 �
 
 容器随机名称在 create 前写入本次工作目录；create/start 不自动重发。清理沿原名称与 ID 读取状态，确认终态后先保存日志，再删除并核名称与 ID 均消失。wait 失败或取消时仍以有界、不可取消的读取保全容器日志。原执行错误与日志读取错误分别保留；日志读取失败不跳过容器清理。create 结果未知且暂未查到对象时保留 unknown，不能宣称清理完成。删除客户端报错后仍回读原对象，确认已移除才结束。
 
-检查失败先读日志并修复对应输入或环境，再决定重跑范围。CLI 会输出有界的错误原因及原日志路径。CI 在 run 的 Artifacts 中保留 `go-check-<run_id>-<attempt>` 三天。内容为本次日志、容器句柄和测试输出，不上传 SDK、模块缓存或二进制。取消会在清理后返回失败。强制 SIGKILL、daemon 不可达或清理超时可能留下未知结果。保留日志和 `container-name.txt`，沿原名称查询，不重新 create。确认原容器终态后处理该对象；不要用删日志、换名称或启动第二份检查绕过未知结果。源码修复与依赖升级通过普通 PR 完成，原操作材料保留。完整 Go 通过仍不代表生产部署、文档结构或安全扫描已验收。
+检查失败先读日志并修复对应输入或环境，再决定重跑范围。CLI 会输出有界的错误原因及原日志路径。CI 在 run 的 Artifacts 中保留 `go-check-<run_id>-<attempt>` 三天。内容为本次日志、容器句柄和测试输出，不上传 SDK、模块缓存或二进制。normal/race 原件分别使用 `container-normal-name.txt`、`container-race-name.txt` 及各自的 `container-<variant>-test-output.txt`，不会相互覆盖。取消会在清理后返回失败。强制 SIGKILL、daemon 不可达或清理超时可能留下未知结果。保留日志和对应名称文件，沿原名称查询，不重新 create。确认原容器终态后处理该对象；不要用删日志、换名称或启动第二份检查绕过未知结果。源码修复与依赖升级通过普通 PR 完成，原操作材料保留。完整 Go 通过仍不代表生产部署、文档结构或安全扫描已验收。
