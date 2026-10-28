@@ -66,13 +66,21 @@ func validPauseUnits(v pauseUnits) bool {
 	return v.Result != "" && (v.GroupInode == 0) == (v.GroupDevice == 0)
 }
 func pauseCompatible(before, current pauseUnits) error {
-	if !validPauseUnits(current) || before.Configuration != current.Configuration || before.StartUSec != current.StartUSec || current.Invocation != "" && current.Invocation != before.Invocation || current.TimerInvocation != "" && current.TimerInvocation != before.TimerInvocation || current.GroupDevice != 0 && (current.GroupDevice != before.GroupDevice || current.GroupInode != before.GroupInode) {
+	if !validPauseUnits(current) || pauseUnitIdentity(before, current) != nil || current.GroupDevice != 0 && (current.GroupDevice != before.GroupDevice || current.GroupInode != before.GroupInode) {
 		return errRefused
 	}
 	for _, pair := range [][2]pausePID{{before.Main, current.Main}, {before.Control, current.Control}} {
 		if pair[1].PID != 0 && pair[0] != pair[1] {
 			return errRefused
 		}
+	}
+	return nil
+}
+
+// Check unit facts before a transient procfs read can end this observation.
+func pauseUnitIdentity(before, current pauseUnits) error {
+	if before.Configuration != current.Configuration || before.StartUSec != current.StartUSec || current.Invocation != "" && current.Invocation != before.Invocation || current.TimerInvocation != "" && current.TimerInvocation != before.TimerInvocation || current.Main.PID != 0 && current.Main.PID != before.Main.PID || current.Control.PID != 0 && current.Control.PID != before.Control.PID {
+		return errRefused
 	}
 	for _, id := range current.Jobs {
 		found := false
@@ -91,6 +99,10 @@ func pauseDrainedShape(v pauseUnits) bool {
 	return v.TimerActive == "inactive" && v.TimerSub == "dead" && v.TimerJob == 0 && (v.WorkerActive == "inactive" || v.WorkerActive == "failed") && (v.WorkerSub == "dead" || v.WorkerSub == "failed") && v.Main.PID == 0 && v.Control.PID == 0 && len(v.Jobs) == 0
 }
 
+func pauseTimerConflict(v pauseUnits, originalJob uint32) bool {
+	return digestPattern.MatchString(v.Configuration) && (v.TimerJob != 0 && v.TimerJob != originalJob || v.TimerActive == "active" || v.TimerActive == "activating")
+}
+
 func pauseInitialShape(v pauseUnits) bool {
 	if !validPauseUnits(v) || v.TimerActive != "active" || v.TimerJob != 0 {
 		return false
@@ -106,7 +118,7 @@ func pauseInitialShape(v pauseUnits) bool {
 type pauseConnection interface {
 	close()
 	identity(context.Context) (string, error)
-	snapshot(context.Context) (pauseUnits, error)
+	snapshot(context.Context, *pauseUnits) (pauseUnits, error)
 	stopTimer(context.Context) (pauseJob, error)
 	event(context.Context, pauseJob) (pauseEvent, error)
 	drained(context.Context, pauseUnits, pauseUnits) error
@@ -172,7 +184,7 @@ func (p pauser) execute(ctx context.Context, r receipt, executionSHA string) (pa
 		if err != nil || managerOwner(manager) == "" {
 			return out, errRefused
 		}
-		before, err := b.snapshot(ctx)
+		before, err := b.snapshot(ctx, nil)
 		if err != nil || !pauseInitialShape(before) {
 			return out, errRefused
 		}
@@ -180,7 +192,7 @@ func (p pauser) execute(ctx context.Context, r receipt, executionSHA string) (pa
 		if err != nil {
 			return out, err
 		}
-		current, err := b.snapshot(ctx)
+		current, err := b.snapshot(ctx, &before)
 		if err != nil || pauseCompatible(before, current) != nil || current.TimerActive != "active" || current.TimerJob != 0 {
 			return out, errRefused
 		}
@@ -205,7 +217,7 @@ func (p pauser) execute(ctx context.Context, r receipt, executionSHA string) (pa
 		if err != nil || finalAdmission != admission {
 			return out, errRefused
 		}
-		current, err = b.snapshot(ctx)
+		current, err = b.snapshot(ctx, &before)
 		if err != nil || pauseCompatible(before, current) != nil || current.TimerActive != "active" || current.TimerJob != 0 || same(i) != nil || ctx.Err() != nil || !s.unchanged() {
 			return out, errRefused
 		}
@@ -257,7 +269,12 @@ func (p pauser) execute(ctx context.Context, r receipt, executionSHA string) (pa
 		if same(saved.Intent) != nil || !s.unchanged() {
 			return out, errRefused
 		}
-		current, err := b.snapshot(ctx)
+		current, err := b.snapshot(ctx, &saved.Intent.Before)
+		// A complete unit observation remains evidence even when a later procfs
+		// or job-list read finds a transient exit. Do not discard a known conflict.
+		if pauseTimerConflict(current, saved.Job.ID) {
+			return out, errRefused
+		}
 		if errors.Is(err, errPauseBusy) {
 			select {
 			case <-ctx.Done():
@@ -269,7 +286,7 @@ func (p pauser) execute(ctx context.Context, r receipt, executionSHA string) (pa
 		if err != nil {
 			return out, err
 		}
-		if pauseCompatible(saved.Intent.Before, current) != nil || current.TimerJob != 0 && current.TimerJob != saved.Job.ID || current.TimerActive == "active" || current.TimerActive == "activating" {
+		if pauseCompatible(saved.Intent.Before, current) != nil {
 			return out, errRefused
 		}
 		if pauseDrainedShape(current) {
@@ -284,7 +301,10 @@ func (p pauser) execute(ctx context.Context, r receipt, executionSHA string) (pa
 				}
 				return out, err
 			}
-			again, err := b.snapshot(ctx)
+			again, err := b.snapshot(ctx, &saved.Intent.Before)
+			if pauseTimerConflict(again, saved.Job.ID) {
+				return out, errRefused
+			}
 			if errors.Is(err, errPauseBusy) || err == nil && !samePauseUnits(current, again) && pauseCompatible(saved.Intent.Before, again) == nil {
 				select {
 				case <-ctx.Done():

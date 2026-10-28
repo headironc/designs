@@ -51,19 +51,29 @@ func readAt(dir *os.File, name string, limit int64) ([]byte, error) {
 }
 
 func startTime(raw []byte, pid int64) (uint64, error) {
-	end := bytes.LastIndexByte(raw, ')')
-	if end < 0 || !bytes.HasPrefix(raw, []byte(strconv.FormatInt(pid, 10)+" (")) {
-		return 0, errRefused
-	}
-	fields := strings.Fields(string(raw[end+1:]))
-	if len(fields) < 20 || fields[0] == "Z" || fields[0] == "X" || fields[0] == "x" {
-		return 0, errRefused
-	}
-	start, err := strconv.ParseUint(fields[19], 10, 64)
-	if err != nil || start == 0 {
+	start, state, err := statIdentity(raw, pid)
+	if err != nil || reapingState(state) {
 		return 0, errRefused
 	}
 	return start, nil
+}
+
+func reapingState(state string) bool { return state == "Z" || state == "X" || state == "x" }
+
+func statIdentity(raw []byte, pid int64) (uint64, string, error) {
+	end := bytes.LastIndexByte(raw, ')')
+	if pid <= 0 || end < 0 || !bytes.HasPrefix(raw, []byte(strconv.FormatInt(pid, 10)+" (")) {
+		return 0, "", errRefused
+	}
+	fields := strings.Fields(string(raw[end+1:]))
+	if len(fields) < 20 || len(fields[0]) != 1 || !strings.Contains("RSDZTtXxKWPI", fields[0]) {
+		return 0, "", errRefused
+	}
+	start, err := strconv.ParseUint(fields[19], 10, 64)
+	if err != nil || start == 0 {
+		return 0, "", errRefused
+	}
+	return start, fields[0], nil
 }
 
 func groupPath(raw []byte) (string, error) {

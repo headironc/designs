@@ -46,16 +46,17 @@ func TestHostIdentityAndField22(t *testing.T) {
 }
 
 func TestHostRejectsExitedReusedAndUnboundProcess(t *testing.T) {
-	for _, kind := range []string{"zombie", "overflow starttime", "wrong uuid", "duplicate uuid", "root group", "relative group", "traversal group", "double slash", "multiple groups", "symlink group", "symlink proc", "nonmember", "wrong executable", "writable executable", "missing boot", "wrong pid", "empty cmdline"} {
+	for _, kind := range []string{"zombie", "dead", "dead lower", "overflow starttime", "wrong uuid", "duplicate uuid", "root group", "relative group", "traversal group", "double slash", "multiple groups", "symlink group", "symlink proc", "nonmember", "wrong executable", "writable executable", "missing boot", "wrong pid", "empty cmdline"} {
 		t.Run(kind, func(t *testing.T) {
 			h, qemu := processFixture(t)
 			switch kind {
-			case "zombie", "overflow starttime", "wrong pid":
+			case "zombie", "dead", "dead lower", "overflow starttime", "wrong pid":
 				path := filepath.Join(h.proc, "4321/stat")
 				raw, _ := os.ReadFile(path)
 				switch kind {
-				case "zombie":
-					raw = []byte(strings.Replace(string(raw), ") S ", ") Z ", 1))
+				case "zombie", "dead", "dead lower":
+					state := map[string]string{"zombie": "Z", "dead": "X", "dead lower": "x"}[kind]
+					raw = []byte(strings.Replace(string(raw), ") S ", ") "+state+" ", 1))
 				case "overflow starttime":
 					raw = []byte(strings.Replace(string(raw), "876543", "18446744073709551616", 1))
 				case "wrong pid":

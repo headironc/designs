@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cloudbase/garm/params"
 	"github.com/headironc/designs/runner/internal/provider"
 )
 
@@ -24,6 +25,8 @@ type pauseFixtureBus struct {
 	sends                      int
 	reads                      int
 	busy                       int
+	busyConflict               string
+	conflictAt                 int
 	onSnapshot                 func()
 	drainBusy                  int
 	eventEntered, drainEntered chan struct{}
@@ -35,16 +38,12 @@ func (b *pauseFixtureBus) identity(context.Context) (string, error) {
 	defer b.mu.Unlock()
 	return b.manager, nil
 }
-func (b *pauseFixtureBus) snapshot(context.Context) (pauseUnits, error) {
+func (b *pauseFixtureBus) snapshot(context.Context, *pauseUnits) (pauseUnits, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.reads++
 	if b.onSnapshot != nil {
 		b.onSnapshot()
-	}
-	if b.stopped && b.busy > 0 {
-		b.busy--
-		return pauseUnits{}, errPauseBusy
 	}
 	v := b.before
 	v.Jobs = append([]uint32{}, v.Jobs...)
@@ -58,6 +57,20 @@ func (b *pauseFixtureBus) snapshot(context.Context) (pauseUnits, error) {
 	}
 	if b.mode == "replacement" && b.stopped {
 		v.Invocation = strings.Repeat("9", 32)
+	}
+	if b.stopped && b.busy > 0 && (b.conflictAt == 0 || b.reads == b.conflictAt) {
+		b.busy--
+		if b.busyConflict != "" {
+			switch b.busyConflict {
+			case "active", "activating":
+				v.TimerActive = b.busyConflict
+			case "foreign_job":
+				v.TimerJob = 99
+			}
+			b.busyConflict = ""
+			return v, errPauseBusy
+		}
+		return pauseUnits{}, errPauseBusy
 	}
 	return v, nil
 }
@@ -263,6 +276,29 @@ func TestPauseBusyDrainContinuesOriginalObservation(t *testing.T) {
 	}
 	if _, err := p2.execute(context.Background(), r2, sha2); err != nil || b2.sends != 1 {
 		t.Fatalf("natural drain recovery: %v", err)
+	}
+}
+
+func TestPauseBusySnapshotKeepsTimerConflict(t *testing.T) {
+	for _, mode := range []string{"active", "activating", "foreign_job"} {
+		for _, stage := range []string{"initial", "final"} {
+			t.Run(mode+"/"+stage, func(t *testing.T) {
+				p, b, r, sha := pauseFixture(t)
+				b.busy, b.busyConflict = 1, mode
+				if stage == "final" {
+					b.conflictAt = 5
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				out, err := p.execute(ctx, r, sha)
+				if !errors.Is(err, errRefused) || out.State != "unknown" || out.JobResult != "done" || out.TimerJob != 42 || b.sends != 1 {
+					t.Fatalf("complete timer conflict lost to busy: %+v %v sends=%d", out, err, b.sends)
+				}
+				if _, err := os.Stat(filepath.Join(p.parent, "pause", "drain.json")); !os.IsNotExist(err) {
+					t.Fatal("conflicting observation published drain", err)
+				}
+			})
+		}
 	}
 }
 
@@ -524,6 +560,46 @@ func TestPauseAdmissionFingerprintStringBoundaries(t *testing.T) {
 	}
 	if digests[0] == digests[1] {
 		t.Fatal("ambiguous string fingerprint")
+	}
+}
+
+func TestPauseGlobalScaleSetGitHubIDAbsenceContract(t *testing.T) {
+	_, _, r, _ := pauseFixture(t)
+	for _, mode := range []string{"extra_uncreated", "target_missing", "target_null", "extra_null"} {
+		t.Run(mode, func(t *testing.T) {
+			bodies := diagnosticBodies()
+			job := "/repos/example/consumer/actions/jobs/9007199254740997"
+			bodies[job] = strings.Replace(bodies[job], `"status":"in_progress"`, `"status":"completed","conclusion":"failure"`, 1)
+			scale := bodies["/api/v1/scalesets/27"]
+			var extra params.ScaleSet
+			if json.Unmarshal([]byte(scale), &extra) != nil {
+				t.Fatal("fixture")
+			}
+			extra.ID, extra.RepoID, extra.ScaleSetID = 28, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", 0
+			extraRaw, err := json.Marshal(extra)
+			if err != nil || bytes.Contains(extraRaw, []byte(`"scale_set_id"`)) {
+				t.Fatal("actual producer must omit uncreated GitHub ID", err)
+			}
+			var target map[string]json.RawMessage
+			json.Unmarshal([]byte(scale), &target)
+			switch mode {
+			case "target_missing":
+				delete(target, "scale_set_id")
+			case "target_null":
+				target["scale_set_id"] = json.RawMessage("null")
+			case "extra_null":
+				var row map[string]json.RawMessage
+				json.Unmarshal(extraRaw, &row)
+				row["scale_set_id"] = json.RawMessage("null")
+				extraRaw, _ = json.Marshal(row)
+			}
+			targetRaw, _ := json.Marshal(target)
+			bodies["/api/v1/scalesets"], bodies["/api/v1/pools"] = "["+string(targetRaw)+","+string(extraRaw)+"]", "[]"
+			_, err = platformFixture(t, bodies).pauseAdmission(context.Background(), r)
+			if (err == nil) != (mode == "extra_uncreated") {
+				t.Fatalf("actual SDK absence contract %s: %v", mode, err)
+			}
+		})
 	}
 }
 

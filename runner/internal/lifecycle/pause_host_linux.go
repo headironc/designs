@@ -47,7 +47,7 @@ func (h pauseHost) boot() (string, error) {
 	}
 	return id, nil
 }
-func (h pauseHost) process(pid uint32) (uint64, error) {
+func (h pauseHost) process(pid uint32, expectedStart uint64) (uint64, error) {
 	if pid == 0 {
 		return 0, nil
 	}
@@ -70,8 +70,13 @@ func (h pauseHost) process(pid uint32) (uint64, error) {
 		}
 		return 0, err
 	}
-	start, err := startTime(raw, int64(pid))
+	// Reaping states retain their identity. The drain caller must compare the
+	// original starttime before deciding to wait, including for a zombie.
+	start, state, err := statIdentity(raw, int64(pid))
 	if err != nil {
+		return 0, errRefused
+	}
+	if expectedStart != 0 && start != expectedStart {
 		return 0, errRefused
 	}
 	group, err := readAt(dir, "cgroup", 4096)
@@ -82,8 +87,13 @@ func (h pauseHost) process(pid uint32) (uint64, error) {
 		return 0, err
 	}
 	name, err := groupPath(group)
+	deleted := strings.TrimSuffix(string(group), "\n") == "0::/system.slice/"+pauseWorker+" (deleted)"
 	if err != nil || name != "/system.slice/"+pauseWorker {
-		return 0, errRefused
+		// A zombie may retain this deleted membership until reaped. Only the
+		// already-bound original identity can use this kernel absence form.
+		if !deleted || expectedStart == 0 || !reapingState(state) {
+			return 0, errRefused
+		}
 	}
 	again, err := readAt(dir, "stat", 8192)
 	if err != nil {
@@ -92,8 +102,8 @@ func (h pauseHost) process(pid uint32) (uint64, error) {
 		}
 		return 0, err
 	}
-	end, err := startTime(again, int64(pid))
-	if err != nil || end != start {
+	end, endState, err := statIdentity(again, int64(pid))
+	if err != nil || end != start || deleted && !reapingState(endState) {
 		return 0, errRefused
 	}
 	if !samePath(dir, path) {
@@ -101,6 +111,9 @@ func (h pauseHost) process(pid uint32) (uint64, error) {
 			return 0, errPauseBusy
 		}
 		return 0, errRefused
+	}
+	if deleted {
+		return start, errPauseBusy
 	}
 	return start, nil
 }
@@ -154,9 +167,16 @@ func (h pauseHost) group() (uint64, uint64, bool, error) {
 	}
 	return st.Dev, st.Ino, empty, nil
 }
-func (h pauseHost) enrich(v *pauseUnits) error {
-	for _, p := range []*pausePID{&v.Main, &v.Control} {
-		start, err := h.process(p.PID)
+func (h pauseHost) enrich(v *pauseUnits, original *pauseUnits) error {
+	old := [2]pausePID{}
+	if original != nil {
+		old = [2]pausePID{original.Main, original.Control}
+	}
+	for i, p := range []*pausePID{&v.Main, &v.Control} {
+		if original != nil && p.PID != 0 && p.PID != old[i].PID {
+			return errRefused
+		}
+		start, err := h.process(p.PID, old[i].Start)
 		if err != nil {
 			return err
 		}
@@ -177,7 +197,7 @@ func (h pauseHost) drained(ctx context.Context, before, current pauseUnits) erro
 		return ctx.Err()
 	}
 	for _, p := range []pausePID{before.Main, before.Control} {
-		currentStart, err := h.process(p.PID)
+		currentStart, err := h.process(p.PID, p.Start)
 		if err != nil {
 			return err
 		}

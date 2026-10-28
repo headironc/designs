@@ -54,11 +54,11 @@ SQLite 的当前配置路径和快照不参与这次写入准入。它们不能�
 
 原事件为非 done 时保留 `timer_job_failed` 和真实 result。原事件为 done 后，程序等待原 worker 自然结束。worker 可初始闲置或执行自己的 oneshot；入口不停止、kill 或重启 worker。
 
-当前检查核 loaded unit、固定 fragment、待 reload、timer/worker 唯一关联、额外触发与停止传播 hooks、固定 timer 配置、oneshot 与准确 `ExecStart`。它还核 unit jobs、worker invocation、启动时间和 main/control PID/starttime，并观察固定 cgroup 的设备/inode 与 `populated`。systemd 的动态计时与命令运行列不作为静态配置摘要。
+当前检查核 loaded unit、固定 fragment、待 reload、timer/worker 唯一关联、额外触发与停止传播 hooks、固定 timer 配置、oneshot 与准确 `ExecStart`。`SuccessExitStatus` 的 exit-code 与 signal 集合必须均为空，避免 override 将非零退出改报 success；缺失或错误 wire 类型也拒绝。它还核 unit jobs、worker invocation、启动时间和 main/control PID/starttime，并观察固定 cgroup 的设备/inode 与 `populated`。systemd 的动态计时与命令运行列不作为静态配置摘要。
 
-成功要求 timer inactive/dead、两 unit 无 job、worker inactive 或 failed、原进程结束且整个 cgroup 无后代。worker 失败但已排空时仍可给暂停结果，同时保留真实 `worker_result`。这不证明 worker 健康。
+成功要求 timer inactive/dead、两 unit 无 job、worker inactive 或 failed、原 main/control PID 消失且整个 cgroup 无 live 后代。`populated=0` 不证明所有 zombie 都已回收，本入口也不声称枚举其他 zombie。worker 失败但已排空时仍可给暂停结果，同时保留真实 `worker_result`。这不证明 worker 健康。
 
-进程退出、跨状态快照和 unit 已 dead 但后代仍在时，可继续同一次有界观察。PID/cgroup 复用、invocation 替换、迟到 start 或 timer 重新激活拒绝当前成功。末尾重读 unit、boot 和 manager；重入也重新核当前排空，不信任陈旧 drain 标志。root 手动启动属于独占窗口之外的活动，程序只检测其可见影响，不控制其他操作方。
+进程退出、跨状态快照和 unit 已 dead 但 live 后代仍在时，可继续同一次有界观察。原 property job 在后续清单消失可表示正常结束；清单明确出现另一个正 job ID 则拒绝，timer 与 worker 均不把它当退出暂态。原进程处于 `Z`/`X`/`x` 回收态时，仍核准确 starttime 与 cgroup，等待该原进程消失。内核可在 cgroup 删除后保留原路径加 ` (deleted)`；只对已匹配原 starttime 的回收态接纳这个准确路径，活进程或其他路径仍拒绝。替换的回收态进程或畸形 stat 继续拒绝，不能仅凭状态字母推定为原 worker。采集入口仍要求存活进程，沿用原 cgroup 路径规则。PID/cgroup 复用、invocation 替换、迟到 start 或 timer 重新激活拒绝当前成功。末尾重读 unit、boot 和 manager；重入也重新核当前排空，不信任陈旧 drain 标志。root 手动启动属于独占窗口之外的活动，程序只检测其可见影响，不控制其他操作方。
 
 三分钟是本次等待上限。到期或取消结束等待，不结束原外部请求。发送后的任意失败都可能已留下原 job、事件或完整 drain 文件；调用者应保留原材料并回读，不能把非零退出当成没有发生作用。
 

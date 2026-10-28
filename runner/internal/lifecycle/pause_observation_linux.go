@@ -57,11 +57,11 @@ func (p pauser) observe(ctx context.Context, r receipt, executionSHA string) pau
 		out.Code = "pause_drain_unrecorded"
 		return out
 	}
-	current, err := b.snapshot(ctx)
+	current, err := b.snapshot(ctx, &saved.Intent.Before)
 	if err != nil || pauseCompatible(saved.Intent.Before, current) != nil || !pauseDrainedShape(current) || b.drained(ctx, saved.Intent.Before, current) != nil {
 		return out
 	}
-	again, err := b.snapshot(ctx)
+	again, err := b.snapshot(ctx, &saved.Intent.Before)
 	if err != nil || !samePauseUnits(current, again) || !s.unchanged() {
 		return out
 	}

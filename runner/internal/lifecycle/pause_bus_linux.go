@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -236,6 +237,17 @@ func pauseServiceConfig(s map[string]any) error {
 	if s["Type"] != "oneshot" || s["Restart"] != "no" || !pauseBool(s["RemainAfterExit"], false) || s["Slice"] != "system.slice" || s["User"] != "" && s["User"] != "root" || s["Group"] != "" && s["Group"] != "root" {
 		return errRefused
 	}
+	// systemd exposes SuccessExitStatus as (aiai): exit codes and signals.
+	success, ok := s["SuccessExitStatus"].([]any)
+	if !ok || len(success) != 2 {
+		return errRefused
+	}
+	for _, value := range success {
+		codes, ok := value.([]int32)
+		if !ok || len(codes) != 0 {
+			return errRefused
+		}
+	}
 	for _, key := range []string{"ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost", "ExecCondition"} {
 		rows, ok := s[key].([][]any)
 		if !ok || len(rows) != 0 {
@@ -312,11 +324,19 @@ func (b *pauseBus) rawSnapshot(ctx context.Context) (pauseUnits, error) {
 	if (main != 0 || control != 0) && (group == "" || out.Invocation == "" || start == 0) {
 		return out, errRefused
 	}
+	// Only validated static configuration columns enter this digest. Runtime
+	// timestamp/PID/result columns deliberately remain separate facts.
+	config := []any{t["Id"], t["FragmentPath"], t["DropInPaths"], w["Id"], w["FragmentPath"], w["DropInPaths"], service["User"], service["Group"], service["Type"], service["Restart"], timer["Unit"]}
+	raw, _ := json.Marshal(config)
+	out.Configuration = fmt.Sprintf("%x", sha256.Sum256(raw))
+	out.Jobs = []uint32{}
+	if workerJob != 0 {
+		out.Jobs = append(out.Jobs, workerJob)
+	}
 	jobs, err := b.api.ListJobsContext(ctx)
 	if err != nil || len(jobs) > 10000 {
 		return out, errRefused
 	}
-	out.Jobs = []uint32{}
 	seen := map[uint32]bool{}
 	timerSeen, workerSeen := false, workerJob == 0
 	for _, job := range jobs {
@@ -326,7 +346,7 @@ func (b *pauseBus) rawSnapshot(ctx context.Context) (pauseUnits, error) {
 		seen[job.Id] = true
 		if job.Unit == pauseTimer {
 			if job.Id != out.TimerJob {
-				return out, errPauseBusy
+				return out, errRefused
 			}
 			timerSeen = true
 		}
@@ -335,38 +355,38 @@ func (b *pauseBus) rawSnapshot(ctx context.Context) (pauseUnits, error) {
 				return out, errRefused
 			}
 			if job.Id != workerJob {
-				return out, errPauseBusy
+				return out, errRefused
 			}
 			workerSeen = true
-			out.Jobs = append(out.Jobs, job.Id)
 		}
 	}
 	if (out.TimerJob != 0) != timerSeen || !workerSeen {
 		return out, errPauseBusy
 	}
-	// Only validated static configuration columns enter this digest. Runtime
-	// timestamp/PID/result columns above deliberately remain separate facts.
-	config := []any{t["Id"], t["FragmentPath"], t["DropInPaths"], w["Id"], w["FragmentPath"], w["DropInPaths"], service["User"], service["Group"], service["Type"], service["Restart"], timer["Unit"]}
-	raw, _ := json.Marshal(config)
-	out.Configuration = fmt.Sprintf("%x", sha256.Sum256(raw))
 	return out, nil
 }
-func (b *pauseBus) snapshot(ctx context.Context) (pauseUnits, error) {
+func (b *pauseBus) snapshot(ctx context.Context, original *pauseUnits) (pauseUnits, error) {
 	before, err := b.rawSnapshot(ctx)
+	if original != nil && (err == nil || errors.Is(err, errPauseBusy)) && pauseUnitIdentity(*original, before) != nil {
+		return before, errRefused
+	}
 	if err != nil {
 		return before, err
 	}
-	if err = b.host.enrich(&before); err != nil {
+	if err = b.host.enrich(&before, original); err != nil {
 		return before, err
 	}
 	after, err := b.rawSnapshot(ctx)
+	if original != nil && (err == nil || errors.Is(err, errPauseBusy)) && pauseUnitIdentity(*original, after) != nil {
+		return after, errRefused
+	}
 	if err != nil {
-		return before, err
+		return after, err
 	}
 	after.Main.Start, after.Control.Start = before.Main.Start, before.Control.Start
 	after.GroupDevice, after.GroupInode = before.GroupDevice, before.GroupInode
 	if !samePauseUnits(before, after) {
-		return before, errPauseBusy
+		return after, errPauseBusy
 	}
 	return before, nil
 }
