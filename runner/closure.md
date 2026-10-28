@@ -44,7 +44,7 @@ LXD 使用固定 SDK 的 `instance_all_projects`、`container_full`、`storage_v
 
 GARM v0.2.1 的 `ScaleSet.Enabled` 使用 `omitempty`，合法省略表示 false，与现有 watchdog 相同。显式 null、错误类型仍拒绝；该合同不适用于必需的身份字段。数据库中的 enabled 则必须逐行是整数 0 或 1，NULL、字符串和其他整数均拒绝。
 
-GARM 实例的 provider/agent 分配值也使用 `omitempty`，pending 实例可以合法省略尚未取得的分配值。额外 pending 记录仍计入残留；原目标记录缺少分配绑定时报告 unknown 并保留实际状态，避免把未分配解释成错误身份。全局与 ScaleSet 清单中的必需记录身份缺失、显式 null 或错误类型仍拒绝；实际观察到的不同身份继续报告 mismatch。
+GARM 实例的 provider/agent 分配值也使用 `omitempty`，pending 实例可以合法省略尚未取得的分配值。原目标绑定完整且清单核对通过时，额外 pending 记录计入残留。原目标记录缺少分配绑定时报告 unknown 并保留实际状态，此时不作完整清单的残留结论，避免把未分配解释成错误身份。全局与 ScaleSet 清单中的必需记录身份缺失、显式 null 或错误类型仍拒绝；实际观察到的不同身份继续报告 mismatch。
 
 guard 的原 policy 摘要及 ScaleSet、池、镜像语义改变会形成 mismatch。原 state 摘要与当前 state 摘要不同可以来自正常后续状态，单独保留当前事实，不自动认定为身份漂移。
 
