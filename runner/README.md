@@ -41,7 +41,7 @@ RUNNER_FIREWALL_NAMESPACE=1 go test -count=1 -tags=integration \
   -run '^TestReloadInPrivateNamespace$' ./internal/firewall
 ```
 
-测试通过 `unshare --user --map-root-user --net` 启动子进程。进入真实内核前，核实际父进程和自身的 namespace，证明 user 和 network 均已隔离。三个额外 network namespace 构造 guest、peer 和外侧转发端点；先证明无过滤时全部探测路径可达，再比较首次原生加载、最终旧规则和原生替换。覆盖 IPv4/IPv6、DHCP、DNS、四个 TCP 端口、错误源/目标及双向转发，并核原子拒绝和其他表保持。namespace 随测试进程结束回收，不进入生产网络 namespace。测试编译或替身通过不证明真实内核验收通过。
+测试通过 `unshare --user --map-root-user --net` 启动子进程。父进程在隔离前打开自己的 namespace 描述符；子进程核描述符类型及原身份，证明 user 和 network 均已隔离，不依赖跨 user namespace 的 `/proc/<parent>/ns` 读取权限。三个额外 network namespace 构造 guest、peer 和外侧转发端点；先证明无过滤时全部探测路径可达，再比较首次原生加载、最终旧规则和原生替换。覆盖 IPv4/IPv6、DHCP、DNS、四个 TCP 端口、错误源/目标及双向转发，并核原子拒绝和其他表保持。namespace 随测试进程结束回收，不进入生产网络 namespace。测试编译或替身通过不证明真实内核验收通过。
 
 ## 服务消费与切换
 

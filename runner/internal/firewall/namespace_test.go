@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/expr"
+	"golang.org/x/sys/unix"
 )
 
 // Final legacy policy after the independently traced egress/diagnostics ports.
@@ -70,6 +71,85 @@ func directParentNamespaces(t *testing.T) (string, string) {
 	return network, user
 }
 
+func inheritedParentNamespaces(t *testing.T) (string, string) {
+	t.Helper()
+	identity := func(fd int, kind int) string {
+		file := os.NewFile(uintptr(fd), "parent namespace")
+		if file == nil {
+			t.Fatal("missing inherited parent namespace")
+		}
+		defer file.Close()
+		actual, err := unix.IoctlRetInt(fd, unix.NS_GET_NSTYPE)
+		if err != nil || actual != kind {
+			t.Fatalf("invalid inherited namespace type: %v", err)
+		}
+		name, err := os.Readlink("/proc/self/fd/" + strconv.Itoa(fd))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return name
+	}
+	return identity(4, unix.CLONE_NEWNET), identity(3, unix.CLONE_NEWUSER)
+}
+
+// This control-only regression never creates a namespace or opens netfilter.
+// It verifies the inherited handles before the privileged packet fixture uses
+// them as proof, including fail-closed handling of swapped or ordinary files.
+func TestNamespaceDescriptorHandoff(t *testing.T) {
+	if os.Getenv("RUNNER_FIREWALL_DESCRIPTOR_FIXTURE") == "1" {
+		network, user := inheritedParentNamespaces(t)
+		if network != namespaceIdentity(t, "net") || user != namespaceIdentity(t, "user") {
+			t.Fatal("inherited namespace handles changed identity")
+		}
+		return
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"valid", "swapped", "ordinary"} {
+		t.Run(kind, func(t *testing.T) {
+			user, err := os.Open("/proc/self/ns/user")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer user.Close()
+			network, err := os.Open("/proc/self/ns/net")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer network.Close()
+			files := []*os.File{user, network}
+			if kind == "swapped" {
+				files[0], files[1] = files[1], files[0]
+			}
+			if kind == "ordinary" {
+				regular, err := os.CreateTemp(t.TempDir(), "not-a-namespace-")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer regular.Close()
+				files = []*os.File{regular, regular}
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, executable, "-test.run=^TestNamespaceDescriptorHandoff$")
+			cmd.Env = append(os.Environ(), "RUNNER_FIREWALL_DESCRIPTOR_FIXTURE=1")
+			cmd.ExtraFiles = files
+			out, err := cmd.CombinedOutput()
+			if ctx.Err() != nil {
+				t.Fatal("namespace descriptor child did not terminate")
+			}
+			if (err == nil) != (kind == "valid") {
+				t.Fatalf("descriptor handoff %s: %v: %s", kind, err, out)
+			}
+			if err != nil && !bytes.Contains(out, []byte("invalid inherited namespace type")) {
+				t.Fatalf("unexpected descriptor refusal: %s", out)
+			}
+		})
+	}
+}
+
 func TestReloadInPrivateNamespace(t *testing.T) {
 	if os.Getenv("RUNNER_FIREWALL_NAMESPACE") != "1" {
 		t.Fatal("enable the documented private namespace test explicitly")
@@ -83,7 +163,20 @@ func TestReloadInPrivateNamespace(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
 		defer cancel()
+		parentUserFile, err := os.Open("/proc/self/ns/user")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer parentUserFile.Close()
+		parentNetFile, err := os.Open("/proc/self/ns/net")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer parentNetFile.Close()
 		cmd := exec.CommandContext(ctx, "unshare", "--user", "--map-root-user", "--net", executable, "-test.run=^TestReloadInPrivateNamespace$", "-test.timeout=45s", "-test.v")
+		// Opening the original handles before unshare avoids cross-user-namespace
+		// ptrace permissions on /proc/<parent>/ns. The child validates nsfs types.
+		cmd.ExtraFiles = []*os.File{parentUserFile, parentNetFile}
 		cmd.Env = append(os.Environ(), "RUNNER_FIREWALL_PARENT_NAMESPACE="+network, "RUNNER_FIREWALL_PARENT_USER_NAMESPACE="+user)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -99,7 +192,7 @@ func TestReloadInPrivateNamespace(t *testing.T) {
 		packetActor(t)
 		return
 	}
-	actualParentNet, actualParentUser := directParentNamespaces(t)
+	actualParentNet, actualParentUser := inheritedParentNamespaces(t)
 	if actualParentNet != parentNetwork || actualParentUser != parentUser {
 		t.Fatal("namespace markers do not match the live original parent")
 	}
