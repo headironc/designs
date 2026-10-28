@@ -21,6 +21,8 @@
 
 已有 [watchdog 暂停原件](pause.md)时，可另传 `--pause-sha256 "$EXPECTED_PAUSE_SHA256"`。root 提供原暂停 producer 摘要；诊断不要求它等于当前程序摘要。未提供时，`watchdog_pause` 报告 producer 未受信任。该维度不创建新原件或发送服务请求。
 
+已有 [gateway 停止原件](gateway.md)时，可同时传 `--gateway-sha256 "$EXPECTED_GATEWAY_SHA256"` 与上述 pause 摘要。root 提供原 gateway producer；`gateway_stop` 共享严格原件 loader，核原 job/event、封存的 controller 发送窗口及当前 gateway 身份/排空，不要求 controller 后续保持 active。没有可信 producer 或完整原件时保持 unknown，不创建事件、不发送请求。
+
 采集与诊断共享同一完整 loader：核原请求、执行记录、完成封印、摘要及重建后的值不变量。缺失、半写、格式不支持、错误 producer 或错绑定均拒绝；不调用平台补造原件。重复诊断不改写三个原文件，只在原结果回读时确认它们及目录的持久化。诊断输出交由调用者保存，不在原目录追加可被误当成许可的文件。
 
 两类凭据均只消费已有 root `0600` raw token 文件。GARM 沿既有 session 文件合同；GitHub 文件是仍待授权供应的部署输入。程序不读取或导出已有 `gh` OAuth，不登录、mint、刷新或撤销凭据。调试传输、代理、URL 和凭据环境覆盖仍拒绝，错误只给固定阶段或错误码。
@@ -40,6 +42,7 @@
 | `services`           | 固定 controller、watchdog service/timer 的当前 invocation、PID 和 job ID                              | 当前 inactive 或没有 job 不替代原 JobRemoved 回执                                   |
 | `database`           | 固定 GARM SQLite 的同一事务快照、准入状态、目标实例及额外残留                                         | 数据库快照不是 controller 停接或原外部操作终结的证明                                |
 | `watchdog_pause`     | 严格核原 timer job/event，并重读当前 timer 与原 worker 排空事实                                       | 只覆盖 timer/worker；整体 unknown 和既有 provenance 缺口保持，不形成清理许可        |
+| `gateway_stop`       | 严格核原 gateway job/event/drain 和 controller 发送窗口，再核当前原进程与 cgroup 排空                 | 只覆盖 gateway；不因原件成功把全部服务、凭据或外部操作升级为 closed                 |
 
 `absent_verified` 表示该次完整且身份稳定的清单未找到对应资源。`present`、`residual`、`mismatch` 和 `unknown` 各自保留；不能把错误当空清单。各来源分别有时限，一个来源失败后继续收集其他事实；不声称跨 GitHub、GARM、LXD、宿主和数据库存在全局事务。
 

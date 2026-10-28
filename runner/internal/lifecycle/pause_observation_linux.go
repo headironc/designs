@@ -3,28 +3,52 @@ package lifecycle
 import "context"
 
 func (p pauser) observe(ctx context.Context, r receipt, executionSHA string) pauseOutcome {
+	v, out := p.openPause(r, executionSHA)
+	if v == nil {
+		return out
+	}
+	defer v.store.close()
+	return v.observe(ctx)
+}
+
+// pauseView retains the strict original files and pause.lock for the gateway's
+// first real dependent action. Callers cannot replace a quiet-unit observation
+// for this original job, nor release and reacquire its lock across that action.
+type pauseView struct {
+	pauser
+	store *pauseStore
+	saved pauseRecords
+}
+
+func (p pauser) openPause(r receipt, executionSHA string) (*pauseView, pauseOutcome) {
 	out := pauseOutcome{State: "unknown", Code: "pause_record_unavailable"}
 	if !digestPattern.MatchString(p.producer) {
 		out.Code = "pause_producer_untrusted"
-		return out
+		return nil, out
 	}
 	s, err := openPauseStore(p.files, p.parent, false)
 	if err != nil {
-		return out
+		return nil, out
 	}
-	defer s.close()
+	fail := func() (*pauseView, pauseOutcome) { s.close(); return nil, out }
 	exists, err := s.existing()
 	if err != nil {
-		return out
+		return fail()
 	}
 	if !exists {
 		out.Code = "pause_not_recorded"
-		return out
+		return fail()
 	}
 	saved, err := s.load(r, executionSHA, p.producer)
 	if err != nil {
-		return out
+		return fail()
 	}
+	return &pauseView{p, s, saved}, out
+}
+
+func (v *pauseView) observe(ctx context.Context) pauseOutcome {
+	p, s, saved := v.pauser, v.store, v.saved
+	out := pauseOutcome{State: "unknown", Code: "pause_record_unavailable"}
 	if saved.Job == nil {
 		out.Code = "pause_job_unknown"
 		return out

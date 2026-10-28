@@ -70,6 +70,7 @@ type diagnosticReport struct {
 	ProvenanceGaps     []string             `json:"provenance_gaps"`
 	Closure            string               `json:"closure"`
 	WatchdogPause      pauseOutcome         `json:"watchdog_pause"`
+	GatewayStop        gatewayOutcome       `json:"gateway_stop"`
 }
 
 type diagnostician struct {
@@ -82,6 +83,7 @@ type diagnostician struct {
 	services     func(context.Context) []serviceObservation
 	database     func(context.Context, receipt) databaseObservation
 	pause        func(context.Context) pauseOutcome
+	gateway      func(context.Context) gatewayOutcome
 }
 
 func (d diagnostician) observe(ctx context.Context, r receipt, producer string) diagnosticReport {
@@ -112,6 +114,10 @@ func (d diagnostician) observe(ctx context.Context, r receipt, producer string) 
 	out.WatchdogPause = pauseOutcome{State: "unknown", Code: "pause_producer_untrusted"}
 	if d.pause != nil {
 		observe(func(c context.Context) { out.WatchdogPause = d.pause(c) })
+	}
+	out.GatewayStop = gatewayOutcome{State: "unknown", Code: "gateway_producer_untrusted"}
+	if d.gateway != nil {
+		observe(func(c context.Context) { out.GatewayStop = d.gateway(c) })
 	}
 	out.Database.RuntimeConnection = "runtime_database_connection_unknown"
 	if out.Database.Configuration == "current_file_fixed_database_verified" {
@@ -144,10 +150,14 @@ func runDiagnostic(ctx context.Context, args []string, output, diagnostic io.Wri
 	ghPath := f.String("github-token-file", "", "existing credential")
 	gaPath := f.String("garm-token-file", "", "existing credential")
 	pauseSHA := f.String("pause-sha256", "", "trusted original pause producer")
+	gatewaySHA := f.String("gateway-sha256", "", "trusted original gateway stop producer")
 	if f.Parse(args) != nil || f.NArg() != 0 || *requestPath == "" || *operations == "" || !digestPattern.MatchString(*captureSHA) || *ghPath == "" || *gaPath == "" {
 		return fail()
 	}
 	if *pauseSHA != "" && !digestPattern.MatchString(*pauseSHA) {
+		return fail()
+	}
+	if *gatewaySHA != "" && (!digestPattern.MatchString(*gatewaySHA) || !digestPattern.MatchString(*pauseSHA)) {
 		return fail()
 	}
 	stage = "identity"
@@ -204,6 +214,13 @@ func runDiagnostic(ctx context.Context, args []string, output, diagnostic io.Wri
 			return connectPause(c, "/run/dbus/system_bus_socket", h)
 		}}
 		d.pause = func(c context.Context) pauseOutcome { return observer.observe(c, original, executionSHA) }
+		if *gatewaySHA != "" {
+			gh := gatewayHost{proc: "/proc", cgroup: "/sys/fs/cgroup", realFS: true, nginx: "/usr/sbin/nginx", controllerExe: "/opt/nucleus-halo/bin/garm"}
+			gateway := gatewayStopper{pause: observer, producer: *gatewaySHA, connect: func(c context.Context) (gatewayConnection, error) {
+				return connectGateway(c, "/run/dbus/system_bus_socket", gh)
+			}}
+			d.gateway = func(c context.Context) gatewayOutcome { return gateway.observe(c, original, executionSHA) }
+		}
 	}
 	report := d.observe(ctx, original, producer)
 	stage = "report"

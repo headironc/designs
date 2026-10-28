@@ -393,23 +393,7 @@ func runPause(ctx context.Context, args []string, output, diagnostic io.Writer) 
 	}}
 	// Credential loading is lazy: existing original systemd requests can always
 	// be observed without acquiring fresh API credentials.
-	p.admission = func(c context.Context, r receipt) (string, error) {
-		a, err := files.read(*gh, 0600, 64*1024+1)
-		if err != nil {
-			return "", errRefused
-		}
-		b, err := files.read(*ga, 0600, 64*1024+1)
-		if err != nil {
-			return "", errRefused
-		}
-		at, bt := strings.TrimSpace(string(a)), strings.TrimSpace(string(b))
-		if !validToken(at) || !validToken(bt) {
-			return "", errRefused
-		}
-		api := newPlatforms(at, bt, nil)
-		defer api.close()
-		return api.pauseAdmission(c, r)
-	}
+	p.admission = lazyAdmission(files, *gh, *ga)
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 	stage = "original_pause"

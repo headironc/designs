@@ -118,10 +118,17 @@ func (h pauseHost) process(pid uint32, expectedStart uint64) (uint64, error) {
 	return start, nil
 }
 func (h pauseHost) group() (uint64, uint64, bool, error) {
-	if h.fs(h.cgroup, unix.CGROUP2_SUPER_MAGIC) != nil {
+	return serviceGroup(h.cgroup, "/system.slice/"+pauseWorker, h.realFS)
+}
+
+func serviceGroup(root, group string, realFS bool) (uint64, uint64, bool, error) {
+	if (pauseHost{realFS: realFS}).fs(root, unix.CGROUP2_SUPER_MAGIC) != nil {
 		return 0, 0, false, errRefused
 	}
-	path := filepath.Join(h.cgroup, "system.slice", pauseWorker)
+	if group == "/" || !filepath.IsAbs(group) || filepath.Clean(group) != group {
+		return 0, 0, false, errRefused
+	}
+	path := filepath.Join(root, group)
 	dir, err := openPath(path, unix.O_RDONLY|unix.O_DIRECTORY, 0)
 	if os.IsNotExist(err) {
 		return 0, 0, true, nil
