@@ -1,0 +1,68 @@
+{
+  "schema": 1,
+  "reviewedAt": "2026-10-28T19:59:46Z",
+  "sourceSHA256": "27fc367c26b03cd7f8b086cbfb2fb905dce598382b989cf132f9381407b6c4c1",
+  "scope": {
+    "scanner": "v1.9.0",
+    "scannerSHA256": "d36c5d591f43f085b4561a3a9db05894d343a86376f20fab7d8c4ffff38b7a01",
+    "go": "1.27.3",
+    "goos": "linux",
+    "goarch": "amd64",
+    "goamd64": "v1",
+    "cgo": "1",
+    "mode": "source",
+    "scan": "symbol",
+    "test": true,
+    "tags": ["integration"],
+    "database": "https://vuln.go.dev"
+  },
+  "module": {
+    "path": "github.com/canonical/lxd",
+    "version": "v0.0.0-20261012123619-3c94d4fae7ff",
+    "sum": "h1:L2U480+XjJ/ZDnbO0FSe3xk0Ag9LrYYtc5NYhX0ona8=",
+    "goModSum": "h1:0A/NGdueCX6ZjvTyLWPzaAWB38ws2PFuAA4Ey7I5e5M="
+  },
+  "packages": [
+    "github.com/canonical/lxd/client",
+    "github.com/canonical/lxd/shared",
+    "github.com/canonical/lxd/shared/api",
+    "github.com/canonical/lxd/shared/cancel",
+    "github.com/canonical/lxd/shared/ioprogress",
+    "github.com/canonical/lxd/shared/logger",
+    "github.com/canonical/lxd/shared/osarch",
+    "github.com/canonical/lxd/shared/revert",
+    "github.com/canonical/lxd/shared/simplestreams",
+    "github.com/canonical/lxd/shared/tcp",
+    "github.com/canonical/lxd/shared/termios",
+    "github.com/canonical/lxd/shared/units",
+    "github.com/canonical/lxd/shared/version",
+    "github.com/canonical/lxd/shared/ws"
+  ],
+  "advisories": [
+    {
+      "id": "GO-2025-3999",
+      "sha256": "14f4fe2f150ed18844aca0dadd46b7f4858e6e1eb459ef775fdedcc670eacc74",
+      "reason": "The daemon operations/events secret disclosure handlers are absent from this source graph; see go-vuln-lxd.md."
+    },
+    {
+      "id": "GO-2025-4003",
+      "sha256": "7206eb7c54cc569c4fa705ff3ff090ba02088de28aa0e16ac5f81832c10ffcac",
+      "reason": "The daemon browser certificate and form request handlers are absent from this source graph; see go-vuln-lxd.md."
+    },
+    {
+      "id": "GO-2025-4121",
+      "sha256": "5ac921c8015618e49e355dd1cd0af73b3f1fe2b417599c5370fcc1765bf5445a",
+      "reason": "The daemon storage-pool permission and shifted-volume implementation is absent from this source graph; see go-vuln-lxd.md."
+    },
+    {
+      "id": "GO-2026-4595",
+      "sha256": "a746240ba83d2bc5583fac222060bc73de01cc2d709c792b7c19629389e1f8bc",
+      "reason": "The daemon certificate-list authorization handler is absent from this source graph; see go-vuln-lxd.md."
+    },
+    {
+      "id": "GO-2026-5306",
+      "sha256": "635c4d7f37cb5b8c7202071eb1c98210894d59bb8d6c82c09ab67e28041c9440",
+      "reason": "The daemon restricted TLS certificate update handler is absent from this source graph; see go-vuln-lxd.md."
+    }
+  ]
+}

@@ -47,6 +47,9 @@ jobs:
           path: |
             .cache/designs-go-vuln/run-*/*.log
             .cache/designs-go-vuln/run-*/source-manifest.json
+            .cache/designs-go-vuln/run-*/scan.json
+            .cache/designs-go-vuln/run-*/packages.json
+            .cache/designs-go-vuln/run-*/assessment.json
   go:
     name: Go runner checks
     runs-on: ubuntu-22.04

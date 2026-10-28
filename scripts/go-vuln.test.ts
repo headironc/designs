@@ -24,6 +24,19 @@ import {
   vulnTool,
 } from "./go-vuln.ts";
 import { CommandFailure, runCommand } from "./go-check.ts";
+import {
+  evaluateLXD,
+  hashJSON,
+  inspectPackages,
+  lxdIDs,
+  lxdModule,
+  lxdPackages,
+  parseScan,
+  runnerInputHash,
+  scopeIdentity,
+  verifyNativeStatus,
+  type ScanIdentity,
+} from "./go-vuln-report.ts";
 
 const repository = path.resolve(import.meta.dirname, "..");
 const tool = path.join(repository, vulnTool.cache, "govulncheck");
@@ -55,6 +68,12 @@ function fixture(t: TestContext) {
   t.after(() => rmSync(root, { recursive: true, force: true }));
   execFileSync("git", ["init", "--quiet", root]);
   mkdirSync(path.join(root, "runner"));
+  mkdirSync(path.join(root, "scripts"));
+  for (const file of ["go-vuln-json.go", "go-vuln-lxd.json"])
+    copyFileSync(
+      path.join(repository, "scripts", file),
+      path.join(root, "scripts", file),
+    );
   writeFileSync(path.join(root, ".gitignore"), ".cache/\nrunner/ignored.go\n");
   writeFileSync(
     path.join(root, "runner/go.mod"),
@@ -127,8 +146,15 @@ test("real scanner detects selected test/tag symbols, keeps reports and leaves l
     goBin,
   });
   assert.equal(clean.findings, false);
+  assert.equal(clean.blocked, false);
   const hit = await checkVulnerabilities({ ...f, goBin });
   assert.equal(hit.findings, true);
+  assert.equal(hit.blocked, true);
+  const assessment = JSON.parse(
+    readFileSync(path.join(hit.report, "assessment.json"), "utf8"),
+  );
+  assert.equal(assessment.nativeJSONExitCode, 0);
+  assert.equal(assessment.nativeTextExitCode, 3);
   assert.match(
     readFileSync(path.join(hit.report, "04-govulncheck.log"), "utf8"),
     /GO-2099-0001/,
@@ -138,6 +164,11 @@ test("real scanner detects selected test/tag symbols, keeps reports and leaves l
   assert.equal(existsSync(path.join(hit.report, "control")), false);
   const control = path.join(f.root, "native");
   mkdirSync(path.join(control, "tmp"), { recursive: true });
+  mkdirSync(path.join(control, "config/go/telemetry"), { recursive: true });
+  writeFileSync(
+    path.join(control, "config/go/telemetry/mode"),
+    "off 2026-10-29",
+  );
   const env = vulnerabilityEnvironment(go, f.cache, control, false);
   for (const [flags, code] of [
     [["-test", "-tags=integration", "-json"], 0],
@@ -154,6 +185,334 @@ test("real scanner detects selected test/tag symbols, keeps reports and leaves l
     assert.equal(result.status, code, result.stderr);
     if (flags.length === 3) assert.match(result.stdout, /GO-2099-0001/);
     else assert.match(result.stdout, /No vulnerabilities found/);
+  }
+  const conversionFailure = spawnSync(
+    tool,
+    [`-db=${f.database}`, "-mode=convert", "-format=text"],
+    {
+      cwd: path.join(f.root, "runner"),
+      env,
+      input: '{"config":',
+      encoding: "utf8",
+      timeout: 60_000,
+    },
+  );
+  assert.equal(conversionFailure.status, 1);
+  assert.match(conversionFailure.stderr, /EOF/);
+});
+
+test("standard library decoder rejects malformed event streams", () => {
+  const result = spawnSync(
+    go,
+    [
+      "test",
+      "-count=1",
+      path.join(repository, "scripts/go-vuln-json.go"),
+      path.join(repository, "scripts/go-vuln-json_test.go"),
+    ],
+    {
+      cwd: repository,
+      env: {
+        PATH: `${goBin}:/usr/bin:/bin`,
+        GOENV: "off",
+        GOWORK: "off",
+        GOTOOLCHAIN: "local",
+        GOPROXY: "off",
+        GOSUMDB: "off",
+        GOCACHE: path.join(repository, ".cache/designs-go-vuln/build"),
+      },
+      encoding: "utf8",
+      timeout: 60_000,
+    },
+  );
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+});
+
+function dispositionFixture() {
+  const record = JSON.parse(
+    readFileSync(path.join(repository, "scripts/go-vuln-lxd.json"), "utf8"),
+  );
+  const osvs = lxdIDs.map((id) => ({
+    id,
+    modified: "2026-10-29T00:00:00Z",
+    affected: [],
+  }));
+  const config = {
+    protocol_version: "v1.0.0",
+    scanner_name: "govulncheck",
+    scanner_version: vulnTool.version,
+    go_version: `go${vulnTool.goVersion}`,
+    scan_level: "symbol",
+    scan_mode: "source",
+    db: vulnTool.database,
+  };
+  const sbom = {
+    go_version: `go${vulnTool.goVersion}`,
+    roots: ["example.com/runner"],
+    modules: [{ path: lxdModule, version: record.module.version }],
+  };
+  const messages: Record<string, unknown>[] = [
+    { config },
+    { SBOM: sbom },
+    ...osvs.map((osv) => ({ osv })),
+    ...lxdIDs.map((osv) => ({
+      finding: {
+        osv,
+        trace: [
+          {
+            module: lxdModule,
+            version: record.module.version,
+            package: lxdPackages[0],
+            function: "ConnectLXDUnixWithContext",
+          },
+        ],
+      },
+    })),
+  ];
+  for (const a of record.advisories)
+    a.sha256 = hashJSON(osvs.find((o) => o.id === a.id));
+  record.scope = scopeIdentity(vulnTool);
+  const actual = {
+    identity: { ...vulnTool } as ScanIdentity,
+    sourceSHA256: record.sourceSHA256 as string,
+    goSum: `${lxdModule} ${record.module.version} ${record.module.sum}\n${lxdModule} ${record.module.version}/go.mod ${record.module.goModSum}\n`,
+    graph: {
+      roots: ["example.com/runner"],
+      lxd: [...lxdPackages],
+      unsupported: [] as string[],
+    },
+  };
+  return { record, messages, actual };
+}
+
+test("only the five bound LXD findings can be disposed, while native findings remain true", () => {
+  const f = dispositionFixture(),
+    report = parseScan(f.messages, vulnTool);
+  const result = evaluateLXD(report, f.record, f.actual);
+  assert.deepEqual(result.disposed, lxdIDs);
+  assert.deepEqual(result.pending, []);
+  assert.equal(verifyNativeStatus(report, 3), true);
+  assert.throws(() => verifyNativeStatus(report, 0), /disagrees/);
+  f.messages.push(
+    {
+      osv: {
+        id: "GO-2099-0002",
+        modified: "2026-10-29T00:00:00Z",
+        affected: [],
+      },
+    },
+    {
+      finding: {
+        osv: "GO-2099-0002",
+        trace: [
+          {
+            module: lxdModule,
+            version: f.record.module.version,
+            package: lxdPackages[0],
+            function: "NewCall",
+          },
+        ],
+      },
+    },
+  );
+  assert.deepEqual(
+    evaluateLXD(parseScan(f.messages, vulnTool), f.record, f.actual).pending,
+    ["GO-2099-0002"],
+  );
+  (
+    f.messages.at(-1)!.finding as { trace: Record<string, unknown>[] }
+  ).trace[0]!.function = undefined;
+  assert.deepEqual(
+    evaluateLXD(parseScan(f.messages, vulnTool), f.record, f.actual).pending,
+    [],
+  );
+});
+
+test("source, locks, graph, scope and OSV changes invalidate the reviewed set", () => {
+  const changes: ((f: ReturnType<typeof dispositionFixture>) => void)[] = [
+    (f) => {
+      f.actual.sourceSHA256 = "f".repeat(64);
+    },
+    (f) => {
+      f.actual.goSum = "";
+    },
+    (f) => {
+      f.actual.graph.lxd.pop();
+    },
+    (f) => {
+      f.actual.graph.lxd.push(`${lxdModule}/lxd`);
+    },
+    (f) => {
+      f.actual.graph.unsupported.push("runner: EmbedFiles");
+    },
+    (f) => {
+      f.actual.identity.hash = "f".repeat(64);
+    },
+    (f) => {
+      f.record.scope.tags = [];
+    },
+    (f) => {
+      (f.messages[2]!.osv as Record<string, unknown>).modified =
+        "2026-10-30T00:00:00Z";
+    },
+    (f) => {
+      (
+        f.messages[1]!.SBOM as { modules: Record<string, unknown>[] }
+      ).modules[0]!.version = "v9.0.0";
+    },
+  ];
+  for (const change of changes) {
+    const f = dispositionFixture();
+    change(f);
+    const result = evaluateLXD(
+      parseScan(f.messages, vulnTool),
+      f.record,
+      f.actual,
+    );
+    assert.deepEqual(result.disposed, []);
+    assert.deepEqual(result.pending, lxdIDs);
+    assert.ok(result.reasons.length);
+  }
+  for (const field of ["module", "version", "package"]) {
+    const f = dispositionFixture();
+    (
+      f.messages.at(-1)!.finding as { trace: Record<string, unknown>[] }
+    ).trace[0]![field] = "other";
+    assert.deepEqual(
+      evaluateLXD(parseScan(f.messages, vulnTool), f.record, f.actual).pending,
+      [lxdIDs.at(-1)],
+    );
+  }
+});
+
+test("source binding includes added, deleted and changed Go files and locks, but excludes Markdown", () => {
+  const entries = [
+    { path: "runner/main.go", sha256: "a" },
+    { path: "runner/main_test.go", sha256: "b" },
+    { path: "runner/go.mod", sha256: "c" },
+    { path: "runner/go.sum", sha256: "d" },
+  ];
+  const expected = runnerInputHash(entries);
+  assert.equal(
+    runnerInputHash([
+      ...entries,
+      { path: "runner/README.md", sha256: "changed" },
+    ]),
+    expected,
+  );
+  assert.notEqual(runnerInputHash(entries.slice(1)), expected);
+  assert.notEqual(
+    runnerInputHash([...entries, { path: "runner/new.go", sha256: "e" }]),
+    expected,
+  );
+  for (let i = 0; i < entries.length; i++)
+    assert.notEqual(
+      runnerInputHash(
+        entries.map((e, j) => (j === i ? { ...e, sha256: "changed" } : e)),
+      ),
+      expected,
+    );
+});
+
+test("go list metadata detects non-Go and embedded main-module inputs without rejecting dependency inputs", () => {
+  for (const field of [
+    "CgoFiles",
+    "CFiles",
+    "CXXFiles",
+    "MFiles",
+    "HFiles",
+    "FFiles",
+    "SFiles",
+    "SwigFiles",
+    "SwigCXXFiles",
+    "SysoFiles",
+    "IgnoredOtherFiles",
+    "EmbedFiles",
+    "EmbedPatterns",
+    "TestEmbedFiles",
+    "TestEmbedPatterns",
+    "XTestEmbedFiles",
+    "XTestEmbedPatterns",
+  ]) {
+    const p = {
+      ImportPath: "example.com/runner",
+      Module: { Path: "example.com/runner" },
+      [field]: ["input"],
+    };
+    assert.equal(
+      inspectPackages([p], "example.com/runner").unsupported.length,
+      1,
+    );
+    assert.equal(inspectPackages([p], "other").unsupported.length, 0);
+  }
+  assert.throws(
+    () => inspectPackages([{ ImportPath: "x", Incomplete: true }], "x"),
+    /Incomplete/,
+  );
+});
+
+test("report identity, associations and disposition shape fail closed", () => {
+  assert.throws(() => parseScan([], vulnTool), /Incomplete/);
+  const repeated = dispositionFixture();
+  repeated.messages.push(structuredClone(repeated.messages[2]!));
+  assert.equal(parseScan(repeated.messages, vulnTool).osvs.size, 5);
+  (repeated.messages.at(-1)!.osv as Record<string, unknown>).modified =
+    "changed";
+  assert.throws(
+    () => parseScan(repeated.messages, vulnTool),
+    /Conflicting OSV/,
+  );
+  const mutations: ((f: ReturnType<typeof dispositionFixture>) => void)[] = [
+    (f) => {
+      f.messages.splice(1, 1);
+    },
+    (f) => {
+      f.messages.push(f.messages[0]!);
+    },
+    (f) => {
+      (f.messages[0]!.config as Record<string, unknown>).protocol_version =
+        "v2";
+    },
+    (f) => {
+      (f.messages[0]!.config as Record<string, unknown>).scan_mode = "binary";
+    },
+    (f) => {
+      f.messages.push({ mystery: {} });
+    },
+    (f) => {
+      f.messages.splice(2, 1);
+    },
+    (f) => {
+      (f.messages.at(-1)!.finding as { trace: unknown[] }).trace = [];
+    },
+  ];
+  for (const mutate of mutations) {
+    const f = dispositionFixture();
+    mutate(f);
+    assert.throws(() => parseScan(f.messages, vulnTool));
+  }
+  for (const mutate of [
+    (r: Record<string, unknown>) => {
+      r.schema = 2;
+    },
+    (r: Record<string, unknown>) => {
+      delete r.sourceSHA256;
+    },
+    (r: Record<string, unknown>) => {
+      r.packages = [];
+    },
+    (r: Record<string, unknown>) => {
+      r.advisories = [];
+    },
+    (r: Record<string, unknown>) => {
+      r.ignore = "*";
+    },
+  ]) {
+    const f = dispositionFixture();
+    mutate(f.record);
+    assert.throws(() =>
+      evaluateLXD(parseScan(f.messages, vulnTool), f.record, f.actual),
+    );
   }
 });
 
@@ -262,6 +621,18 @@ test("concurrent live source changes fail after an otherwise completed scan", as
       "package main\nfunc main() { println(1) }\n",
     ),
   );
+  await rejectsOperation(
+    checkVulnerabilities({ ...f, database, goBin }),
+    /source changed/,
+  );
+});
+
+test("concurrent disposition changes cannot approve a completed scan", async (t) => {
+  const f = fixture(t);
+  const database = await databaseServer(t, f.root, () => {
+    const file = path.join(f.root, "scripts/go-vuln-lxd.json");
+    writeFileSync(file, readFileSync(file, "utf8") + "\n");
+  });
   await rejectsOperation(
     checkVulnerabilities({ ...f, database, goBin }),
     /source changed/,
@@ -378,7 +749,9 @@ test("cleanup failure rejects a completed scan and retains diagnostics", async (
   const database = await databaseServer(t, f.root, () => {
     const run = readdirSync(f.cache).find((name) => name.startsWith("run-"));
     assert.ok(run);
-    blocked = path.join(f.cache, run, "control/bin");
+    blocked = path.join(f.cache, run, "control/cleanup-blocked");
+    mkdirSync(blocked);
+    writeFileSync(path.join(blocked, "owned"), "cleanup acceptance");
     chmodSync(blocked, 0);
   });
   try {
@@ -389,6 +762,10 @@ test("cleanup failure rejects a completed scan and retains diagnostics", async (
     assert.ok(blocked);
     const report = path.dirname(path.dirname(blocked));
     assert.ok(existsSync(path.join(report, "04-govulncheck.log")));
+    assert.ok(
+      existsSync(path.join(report, "assessment.json")),
+      "scan and native conversion completed before cleanup failure",
+    );
   } finally {
     if (blocked) chmodSync(blocked, 0o700);
   }

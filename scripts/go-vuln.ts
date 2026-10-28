@@ -18,6 +18,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CommandFailure, runCommand } from "./go-check.ts";
 import {
+  evaluateLXD,
+  inspectPackages,
+  parseScan,
+  runnerInputHash,
+  verifyNativeStatus,
+  type ScanIdentity,
+} from "./go-vuln-report.ts";
+import {
   listSourcePaths,
   openSourceFile,
   openSourceRoot,
@@ -25,6 +33,9 @@ import {
 } from "./source.ts";
 
 const repository = path.resolve(import.meta.dirname, "..");
+const scanInputs = ["scripts/go-vuln-json.go", "scripts/go-vuln-lxd.json"];
+const isScanInput = (file: string) =>
+  file.startsWith("runner/") || scanInputs.includes(file);
 export const vulnTool = {
   version: "v1.9.0",
   goVersion: "1.27.3",
@@ -140,7 +151,12 @@ export async function checkVulnerabilities(
     signal?: AbortSignal;
     database?: string;
   } = {},
-): Promise<{ findings: boolean; report: string }> {
+): Promise<{
+  findings: boolean;
+  blocked: boolean;
+  summary: string;
+  report: string;
+}> {
   if (process.platform !== "linux" || process.arch !== "x64")
     throw new Error("Go vulnerability checks require Linux amd64");
   const root = path.resolve(options.root ?? repository);
@@ -153,6 +169,8 @@ export async function checkVulnerabilities(
   let control: string | undefined;
   let preserve = false;
   let findings = false;
+  let blocked = false;
+  let summary = "Go vulnerability dependencies prepared";
   let entries: ReturnType<typeof readSourceEntries> | undefined;
   let files: string[] = [];
   let cacheDescriptor: number | undefined;
@@ -196,9 +214,12 @@ export async function checkVulnerabilities(
       "off 2026-10-29",
       { flag: "wx", mode: 0o600 },
     );
-    files = listSourcePaths(root).filter((file) => file.startsWith("runner/"));
+    files = listSourcePaths(root).filter(isScanInput);
     if (!files.includes("runner/go.mod") || !files.includes("runner/go.sum"))
       throw new Error("Missing runner module locks in Git source");
+    for (const file of scanInputs)
+      if (!files.includes(file))
+        throw new Error(`Missing scanner input: ${file}`);
     entries = readSourceEntries(source, files);
     writeFileSync(
       path.join(childRun, "source-manifest.json"),
@@ -243,7 +264,12 @@ export async function checkVulnerabilities(
       Boolean(options.prepare),
     );
     let sequence = 0;
-    const command = async (binary: string, args: string[], extraEnv = env) => {
+    const command = async (
+      binary: string,
+      args: string[],
+      extraEnv = env,
+      input?: string,
+    ) => {
       const log = path.join(
         childRun,
         `${String(++sequence).padStart(2, "0")}-${path.basename(binary)}.log`,
@@ -255,6 +281,7 @@ export async function checkVulnerabilities(
           log,
           timeoutMs: 10 * 60_000,
           signal: options.signal,
+          input,
         });
       } catch (error) {
         if (error instanceof CommandFailure && !error.groupClosed)
@@ -301,24 +328,116 @@ export async function checkVulnerabilities(
       throw new Error("Unexpected govulncheck build identity");
     if (!options.prepare) {
       await command(go, ["mod", "verify"]);
-      try {
-        await command(binary, [
-          `-db=${options.database ?? vulnTool.database}`,
-          "-scan=symbol",
+      const raw = await command(binary, [
+        `-db=${options.database ?? vulnTool.database}`,
+        "-scan=symbol",
+        "-test",
+        "-tags=integration",
+        "-format=json",
+        "./...",
+      ]);
+      const save = (name: string, value: unknown) =>
+        writeFileSync(
+          path.join(childRun, name),
+          JSON.stringify(value, null, 2) + "\n",
+          { flag: "wx", mode: 0o600 },
+        );
+      writeFileSync(path.join(childRun, "scan.json"), raw, {
+        flag: "wx",
+        mode: 0o600,
+      });
+      const helper = path.join(control, "bin/go-vuln-json");
+      await command(go, [
+        "build",
+        "-trimpath",
+        "-buildvcs=false",
+        "-o",
+        helper,
+        path.join(snapshot, "scripts/go-vuln-json.go"),
+      ]);
+      const decode = async (mode: string, data: string) =>
+        JSON.parse(await command(helper, [mode], env, data)) as unknown;
+      const identity: ScanIdentity = {
+        ...vulnTool,
+        database: options.database ?? vulnTool.database,
+      };
+      const report = parseScan(await decode("scan", raw), identity);
+      const packages = await decode(
+        "packages",
+        await command(go, [
+          "list",
+          "-deps",
           "-test",
           "-tags=integration",
-          "-show=version,verbose",
+          "-json",
           "./...",
-        ]);
+        ]),
+      );
+      const graph = inspectPackages(packages, moduleShape.Module.Path);
+      save("packages.json", packages);
+      const expectedRoots = [...new Set(report.sbom.roots as string[])].sort();
+      if (JSON.stringify(expectedRoots) !== JSON.stringify(graph.roots))
+        throw new Error("Scanner SBOM roots differ from selected Go packages");
+      const localDB = path.join(control, "conversion-db");
+      mkdirSync(path.join(localDB, "index"), { recursive: true });
+      // Convert only replays the completed scan. Its initial metadata lookup
+      // stays local; the original config in scan.json is the scan authority.
+      writeFileSync(
+        path.join(localDB, "index/db.json"),
+        JSON.stringify({
+          modified: report.config.db_last_modified ?? "1970-01-01T00:00:00Z",
+        }),
+      );
+      writeFileSync(path.join(localDB, "index/modules.json"), "[]");
+      let nativeTextExitCode: 0 | 3 = 0;
+      try {
+        await command(
+          binary,
+          [
+            `-db=file://${localDB}`,
+            "-mode=convert",
+            "-format=text",
+            "-show=version,verbose",
+          ],
+          env,
+          raw,
+        );
       } catch (error) {
         if (
           error instanceof CommandFailure &&
           error.exitCode === 3 &&
           error.groupClosed
         )
-          findings = true;
+          nativeTextExitCode = 3;
         else throw error;
       }
+      findings = verifyNativeStatus(report, nativeTextExitCode);
+      const assessment = evaluateLXD(
+        report,
+        JSON.parse(
+          readFileSync(path.join(snapshot, "scripts/go-vuln-lxd.json"), "utf8"),
+        ),
+        {
+          identity,
+          sourceSHA256: runnerInputHash(entries),
+          goSum: readFileSync(path.join(snapshot, "runner/go.sum"), "utf8"),
+          graph,
+        },
+      );
+      blocked = assessment.pending.length > 0;
+      save("assessment.json", {
+        nativeJSONExitCode: 0,
+        nativeTextExitCode,
+        sourceSHA256: runnerInputHash(entries),
+        ...assessment,
+        blocked,
+        note: "Scan assessment; final CLI acceptance also requires unchanged inputs and successful cleanup.",
+      });
+      const count = new Set(report.reachable.map((finding) => finding.osv))
+        .size;
+      summary = `Native scan reported ${count} reachable advisories (native text exit ${nativeTextExitCode}); ${assessment.disposed.length} source-not-affected; ${assessment.pending.length} unhandled reachable advisories`;
+      if (assessment.reasons.length && findings)
+        summary += `; disposition invalid: ${assessment.reasons.join("; ")}`;
     }
   } catch (error) {
     failures.push(error);
@@ -329,9 +448,7 @@ export async function checkVulnerabilities(
         const current = openSourceRoot(root);
         try {
           sameDirectory(current, source);
-          const currentFiles = listSourcePaths(root).filter((file) =>
-            file.startsWith("runner/"),
-          );
+          const currentFiles = listSourcePaths(root).filter(isScanInput);
           const actual = readSourceEntries(current, currentFiles);
           if (
             actual.length !== entries.length ||
@@ -437,7 +554,7 @@ export async function checkVulnerabilities(
       failures,
       `Go vulnerability operation failed; diagnostics: ${run ?? "not created"}${preserve ? "; cleanup unknown, preserve source/control for recovery" : ""}`,
     );
-  return { findings, report: run! };
+  return { findings, blocked, summary, report: run! };
 }
 
 if (
@@ -464,10 +581,8 @@ if (
       prepare: args[0] === "--prepare",
       signal: controller.signal,
     });
-    console.log(
-      `${args[0] ? "Go vulnerability dependencies prepared" : result.findings ? "Reachable Go vulnerabilities found (native exit 3)" : "No reachable Go vulnerabilities found in the selected Linux source graph"}; diagnostics: ${result.report}`,
-    );
-    process.exitCode = result.findings ? 1 : 0;
+    console.log(`${result.summary}; diagnostics: ${result.report}`);
+    process.exitCode = result.blocked ? 1 : 0;
   } catch (error) {
     console.error(describeFailure(error));
     process.exitCode = 2;

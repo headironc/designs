@@ -22,6 +22,8 @@ The legacy shared CI executor and fixed document policy are retired.
   `bun run go:vuln:check` for the selected Linux Go source graph. Run
   `bun run test:go-vuln` after changing this tooling and `test:go-tools` after
   changing its shared command lifecycle. README.md owns findings, scope and recovery.
+  `go-vuln-lxd.md` owns the five source-not-affected judgments and their invalidation
+  rules; preserve native findings when applying them.
 - Run nft integration tests only in the documented private network namespace.
   Do not run the runner binary, install units, or load rules on the real host
   merely to validate a source change.
