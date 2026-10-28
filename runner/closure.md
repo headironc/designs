@@ -19,24 +19,27 @@
 
 `EXPECTED_CAPTURE_SHA256` 由 root 依据原采集成品提供。它核对原回执中的 producer，不要求等于当前诊断程序摘要。报告分别给出 `capture_producer_sha256`、`diagnostic_producer_sha256` 和观察时间；不从环境虚构 Git 提交。
 
+已有 [watchdog 暂停原件](pause.md)时，可另传 `--pause-sha256 "$EXPECTED_PAUSE_SHA256"`。root 提供原暂停 producer 摘要；诊断不要求它等于当前程序摘要。未提供时，`watchdog_pause` 报告 producer 未受信任。该维度不创建新原件或发送服务请求。
+
 采集与诊断共享同一完整 loader：核原请求、执行记录、完成封印、摘要及重建后的值不变量。缺失、半写、格式不支持、错误 producer 或错绑定均拒绝；不调用平台补造原件。重复诊断不改写三个原文件，只在原结果回读时确认它们及目录的持久化。诊断输出交由调用者保存，不在原目录追加可被误当成许可的文件。
 
 两类凭据均只消费已有 root `0600` raw token 文件。GARM 沿既有 session 文件合同；GitHub 文件是仍待授权供应的部署输入。程序不读取或导出已有 `gh` OAuth，不登录、mint、刷新或撤销凭据。调试传输、代理、URL 和凭据环境覆盖仍拒绝，错误只给固定阶段或错误码。
 
 ## 各维度的含义
 
-| 维度 | 实际观察 | 不能据此推出的结论 |
-| --- | --- | --- |
-| `job` | GitHub repository、原 run attempt、job、commit 和 runner 身份；保留真实 conclusion，并另报 run 状态 | 已完成 job 不要求整个 run 已结束；任务 failure、cancelled、timed_out 不变成 success |
-| `registration` | 固定 repository 的完整分页 runner 清单，核总数、页链和重复身份 | 目标 GET 的 404、缺页或 null 不能证明注销 |
-| `garm` | controller、repository、GitHub endpoint、准确 ScaleSet，以及全局和目标 ScaleSet 实例清单 | GARM 空清单不证明原删除操作已终结；disabled 不构成维护许可 |
-| `machine.instances` | 全 project 的完整 LXD 实例、快照和备份；核原 VM UUID、名称、控制器、池、镜像、profile、位置及可写附件 | 同名替换、未知附件、快照或备份残留不等于原 VM 已干净回收 |
-| `machine.volumes` | 专用 `halo-ci` pool 的全 project 卷及卷快照，保留原根卷的独立 UUID 和类型、位置、附件关系 | 其他 project 的非 image 卷仍是专用 pool 残留；不能用 VM UUID 替代卷 UUID |
-| `machine.operations` | LXD 当前 operation 的完整清单及状态 | 当前未发现 operation 不补足原操作回执；迟到、变化或未知状态保留未知 |
-| `host` | 原 boot、PID/starttime、QEMU 身份和 cgroup 设备/inode、`populated` | boot 改变、PID/cgroup 复用或读取失败不等于资源闭合；进程消失与 cgroup 空分别报告 |
-| `guard` | provider 拥有的永久锁、保护文件和状态校验；当前 active、intent/latch、policy 摘要与绑定语义 | pending、maintenance 或锁忙只形成读失败；不清 intent/latch，不放宽正常准入 |
-| `services` | 固定 controller、watchdog service/timer 的当前 invocation、PID 和 job ID | 当前 inactive 或没有 job 不替代原 JobRemoved 回执 |
-| `database` | 固定 GARM SQLite 的同一事务快照、准入状态、目标实例及额外残留 | 数据库快照不是 controller 停接或原外部操作终结的证明 |
+| 维度                 | 实际观察                                                                                              | 不能据此推出的结论                                                                  |
+| -------------------- | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `job`                | GitHub repository、原 run attempt、job、commit 和 runner 身份；保留真实 conclusion，并另报 run 状态   | 已完成 job 不要求整个 run 已结束；任务 failure、cancelled、timed_out 不变成 success |
+| `registration`       | 固定 repository 的完整分页 runner 清单，核总数、页链和重复身份                                        | 目标 GET 的 404、缺页或 null 不能证明注销                                           |
+| `garm`               | controller、repository、GitHub endpoint、准确 ScaleSet，以及全局和目标 ScaleSet 实例清单              | GARM 空清单不证明原删除操作已终结；disabled 不构成维护许可                          |
+| `machine.instances`  | 全 project 的完整 LXD 实例、快照和备份；核原 VM UUID、名称、控制器、池、镜像、profile、位置及可写附件 | 同名替换、未知附件、快照或备份残留不等于原 VM 已干净回收                            |
+| `machine.volumes`    | 专用 `halo-ci` pool 的全 project 卷及卷快照，保留原根卷的独立 UUID 和类型、位置、附件关系             | 其他 project 的非 image 卷仍是专用 pool 残留；不能用 VM UUID 替代卷 UUID            |
+| `machine.operations` | LXD 当前 operation 的完整清单及状态                                                                   | 当前未发现 operation 不补足原操作回执；迟到、变化或未知状态保留未知                 |
+| `host`               | 原 boot、PID/starttime、QEMU 身份和 cgroup 设备/inode、`populated`                                    | boot 改变、PID/cgroup 复用或读取失败不等于资源闭合；进程消失与 cgroup 空分别报告    |
+| `guard`              | provider 拥有的永久锁、保护文件和状态校验；当前 active、intent/latch、policy 摘要与绑定语义           | pending、maintenance 或锁忙只形成读失败；不清 intent/latch，不放宽正常准入          |
+| `services`           | 固定 controller、watchdog service/timer 的当前 invocation、PID 和 job ID                              | 当前 inactive 或没有 job 不替代原 JobRemoved 回执                                   |
+| `database`           | 固定 GARM SQLite 的同一事务快照、准入状态、目标实例及额外残留                                         | 数据库快照不是 controller 停接或原外部操作终结的证明                                |
+| `watchdog_pause`     | 严格核原 timer job/event，并重读当前 timer 与原 worker 排空事实                                       | 只覆盖 timer/worker；整体 unknown 和既有 provenance 缺口保持，不形成清理许可        |
 
 `absent_verified` 表示该次完整且身份稳定的清单未找到对应资源。`present`、`residual`、`mismatch` 和 `unknown` 各自保留；不能把错误当空清单。各来源分别有时限，一个来源失败后继续收集其他事实；不声称跨 GitHub、GARM、LXD、宿主和数据库存在全局事务。
 
