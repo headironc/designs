@@ -575,6 +575,147 @@ test("create uncertainty stays unknown and lost replies are resolved against the
   }
 });
 
+test("cancellation during container removal completes cleanup and cannot report success", async (t) => {
+  const dockerExecutable = resolveExecutable("docker", process.env.PATH ?? "");
+  for (const cancellation of ["SIGTERM", "deadline"] as const) {
+    const root = fixture(t);
+    fakeGo(root, "container-pass");
+    const removal = path.join(root, "removal-started");
+    const release = path.join(root, "release-removal");
+    const cancel = path.join(root, "cancel-deadline");
+    writeFileSync(
+      path.join(root, "docker"),
+      `#!${process.execPath}
+      const fs = require("node:fs");
+      const {spawnSync} = require("node:child_process");
+      const args = process.argv.slice(2);
+      const execute = () => {
+        const result = spawnSync(${JSON.stringify(dockerExecutable)}, args, {stdio:"inherit", timeout:10000});
+        process.exit(result.status ?? 1);
+      };
+      if (args[0] !== "rm") execute();
+      fs.writeFileSync(${JSON.stringify(removal)}, args[1]);
+      const deadline = setTimeout(() => {console.error("removal fixture timed out"); process.exit(1);}, 15000);
+      const poll = setInterval(() => {
+        if (!fs.existsSync(${JSON.stringify(release)})) return;
+        clearInterval(poll); clearTimeout(deadline); execute();
+      }, 10);
+    `,
+      { mode: 0o755 },
+    );
+    const preload = path.join(root, "deadline.cjs");
+    writeFileSync(
+      preload,
+      `
+      const fs = require("node:fs");
+      const original = global.setTimeout;
+      global.setTimeout = (callback, milliseconds, ...args) => {
+        if (milliseconds !== 30 * 60000) return original(callback, milliseconds, ...args);
+        const timer = setInterval(() => {
+          if (!fs.existsSync(${JSON.stringify(cancel)})) return;
+          clearInterval(timer);
+          callback(...args);
+        }, 10);
+        return timer;
+      };
+    `,
+    );
+    const child = spawn(
+      process.execPath,
+      [
+        ...(cancellation === "deadline" ? ["--require", preload] : []),
+        cli,
+        "--stage=container",
+      ],
+      {
+        cwd: repository,
+        env: { ...process.env, PATH: `${root}:${process.env.PATH}` },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    let output = "";
+    let errors = "";
+    child.stdout.on("data", (chunk) => {
+      output += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      errors += chunk;
+    });
+    const finished = new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", resolve);
+    });
+    const timeout = setTimeout(() => child.kill("SIGKILL"), 25000);
+    let name: string | undefined;
+    try {
+      const waiting = Date.now() + 10000;
+      while (
+        !existsSync(removal) &&
+        child.exitCode === null &&
+        Date.now() < waiting
+      )
+        await delay(10);
+      assert.ok(existsSync(removal), output + errors);
+      name = /Private container handle: (designs-go-[a-f0-9-]+)/.exec(
+        output,
+      )?.[1];
+      assert.ok(name, output + errors);
+      const id = readFileSync(removal, "utf8");
+      assert.match(id, /^[a-f0-9]{64}$/);
+      if (cancellation === "SIGTERM") child.kill("SIGTERM");
+      else writeFileSync(cancel, "cancel\n");
+      const notice =
+        cancellation === "SIGTERM"
+          ? "Received SIGTERM"
+          : "Go command deadline reached";
+      const observed = Date.now() + 5000;
+      while (
+        !errors.includes(notice) &&
+        child.exitCode === null &&
+        Date.now() < observed
+      )
+        await delay(10);
+      assert.ok(errors.includes(notice), output + errors);
+      writeFileSync(release, "continue cleanup\n");
+      assert.equal(await finished, 130, output + errors);
+      assert.match(output, /Container terminal:/);
+      assert.match(output, /Private container absent:/);
+      assert.doesNotMatch(
+        output,
+        /Complete Go check passed|Partial Go check passed|image prepared/,
+      );
+      for (const filter of [`id=${id}`, `name=^/${name}$`])
+        assert.equal(
+          execFileSync(
+            dockerExecutable,
+            [
+              "container",
+              "ls",
+              "--all",
+              "--no-trunc",
+              "--filter",
+              filter,
+              "--format",
+              "{{.ID}}",
+            ],
+            { encoding: "utf8", timeout: 10000 },
+          ).trim(),
+          "",
+        );
+    } finally {
+      writeFileSync(release, "continue cleanup\n");
+      if (child.exitCode === null && child.signalCode === null)
+        child.kill("SIGTERM");
+      await finished;
+      clearTimeout(timeout);
+      name ??= /Private container handle: (designs-go-[a-f0-9-]+)/.exec(
+        output,
+      )?.[1];
+      if (name) cleanupContainer(name, dockerExecutable);
+    }
+  }
+});
+
 test("CLI cancellation and forced termination leave no owned Docker fixture", async (t) => {
   const dockerExecutable = resolveExecutable("docker", process.env.PATH ?? "");
   for (const signal of ["SIGTERM", "SIGKILL"] as const) {

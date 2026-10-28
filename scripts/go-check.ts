@@ -604,6 +604,9 @@ export async function checkGo(
         }
       }
     }
+    // Cleanup deliberately ignores cancellation, but must not turn it into success.
+    if (signal.aborted && !failures.includes(signal.reason))
+      failures.push(signal.reason);
     if (failures.length === 1) throw failures[0];
     if (failures.length > 1)
       throw new AggregateError(
