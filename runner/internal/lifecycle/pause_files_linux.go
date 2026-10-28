@@ -78,15 +78,28 @@ type pauseRecords struct {
 	Drain     *pauseDrain
 }
 
-type pauseStore struct {
+type pauseStore struct{ *serviceFiles }
+
+// serviceFiles owns immutable local receipt persistence. The consumers select
+// their fixed slot, lock and record schema; this type grants no service action.
+type serviceFiles struct {
 	files             protectedFiles
 	parent, lock, dir *os.File
 	path              string
+	lockPath          string
 	raw               map[string][]byte
 	pinned            map[string]*os.File
 }
 
 func openPauseStore(files protectedFiles, parent string, createLock bool) (*pauseStore, error) {
+	s, err := openServiceFiles(files, parent, "pause", "pause.lock", createLock)
+	if err != nil {
+		return nil, err
+	}
+	return &pauseStore{s}, nil
+}
+
+func openServiceFiles(files protectedFiles, parent, slotName, lockName string, createLock bool) (*serviceFiles, error) {
 	if files.parents(filepath.Join(parent, "unused")) != nil {
 		return nil, errRefused
 	}
@@ -94,14 +107,14 @@ func openPauseStore(files protectedFiles, parent string, createLock bool) (*paus
 	if err != nil {
 		return nil, err
 	}
-	s := &pauseStore{files: files, parent: dir, path: filepath.Join(parent, "pause"), raw: map[string][]byte{}, pinned: map[string]*os.File{}}
-	fail := func() (*pauseStore, error) { s.close(); return nil, errRefused }
+	s := &serviceFiles{files: files, parent: dir, path: filepath.Join(parent, slotName), lockPath: filepath.Join(parent, lockName), raw: map[string][]byte{}, pinned: map[string]*os.File{}}
+	fail := func() (*serviceFiles, error) { s.close(); return nil, errRefused }
 	if metadata(dir, files.uid, unix.S_IFDIR|0700) != nil {
 		return fail()
 	}
 	flags, mode := unix.O_RDONLY, uint32(0)
 	var slot unix.Stat_t
-	statErr := unix.Fstatat(int(dir.Fd()), "pause", &slot, unix.AT_SYMLINK_NOFOLLOW)
+	statErr := unix.Fstatat(int(dir.Fd()), slotName, &slot, unix.AT_SYMLINK_NOFOLLOW)
 	if statErr != nil && !errors.Is(statErr, unix.ENOENT) {
 		return fail()
 	}
@@ -113,9 +126,9 @@ func openPauseStore(files protectedFiles, parent string, createLock bool) (*paus
 		flags = unix.O_RDWR | unix.O_CREAT | unix.O_EXCL
 		mode = 0600
 	}
-	s.lock, err = openPath(filepath.Join(parent, "pause.lock"), flags, mode)
+	s.lock, err = openPath(s.lockPath, flags, mode)
 	if createLock && errors.Is(err, os.ErrExist) {
-		s.lock, err = openPath(filepath.Join(parent, "pause.lock"), unix.O_RDWR, 0)
+		s.lock, err = openPath(s.lockPath, unix.O_RDWR, 0)
 	}
 	if err != nil {
 		s.close()
@@ -126,7 +139,7 @@ func openPauseStore(files protectedFiles, parent string, createLock bool) (*paus
 	}
 	return s, nil
 }
-func (s *pauseStore) close() {
+func (s *serviceFiles) close() {
 	for _, f := range s.pinned {
 		f.Close()
 	}
@@ -140,7 +153,7 @@ func (s *pauseStore) close() {
 		s.parent.Close()
 	}
 }
-func (s *pauseStore) unchanged() bool {
+func (s *serviceFiles) unchanged() bool {
 	info, err := s.lock.Stat()
 	for name, raw := range s.raw {
 		current, e := s.files.read(filepath.Join(s.path, name), 0600, 64*1024)
@@ -148,9 +161,9 @@ func (s *pauseStore) unchanged() bool {
 			return false
 		}
 	}
-	return err == nil && info.Size() == 0 && s.files.parents(s.path) == nil && samePath(s.parent, filepath.Dir(s.path)) && samePath(s.lock, filepath.Join(filepath.Dir(s.path), "pause.lock")) && metadata(s.parent, s.files.uid, unix.S_IFDIR|0700) == nil && metadata(s.lock, s.files.uid, unix.S_IFREG|0600) == nil && (s.dir == nil || samePath(s.dir, s.path) && metadata(s.dir, s.files.uid, unix.S_IFDIR|0700) == nil)
+	return err == nil && info.Size() == 0 && s.files.parents(s.path) == nil && samePath(s.parent, filepath.Dir(s.path)) && samePath(s.lock, s.lockPath) && metadata(s.parent, s.files.uid, unix.S_IFDIR|0700) == nil && metadata(s.lock, s.files.uid, unix.S_IFREG|0600) == nil && (s.dir == nil || samePath(s.dir, s.path) && metadata(s.dir, s.files.uid, unix.S_IFDIR|0700) == nil)
 }
-func (s *pauseStore) track(name string, raw []byte) error {
+func (s *serviceFiles) track(name string, raw []byte) error {
 	if old, ok := s.raw[name]; ok {
 		if !bytes.Equal(old, raw) || !s.unchanged() {
 			return errRefused
@@ -168,7 +181,7 @@ func (s *pauseStore) track(name string, raw []byte) error {
 	}
 	return nil
 }
-func (s *pauseStore) existing() (bool, error) {
+func (s *serviceFiles) existing() (bool, error) {
 	dir, err := openPath(s.path, unix.O_RDONLY|unix.O_DIRECTORY, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
@@ -182,8 +195,8 @@ func (s *pauseStore) existing() (bool, error) {
 	}
 	return true, nil
 }
-func (s *pauseStore) reserve() error {
-	if !s.unchanged() || unix.Mkdirat(int(s.parent.Fd()), "pause", 0700) != nil {
+func (s *serviceFiles) reserve() error {
+	if !s.unchanged() || unix.Mkdirat(int(s.parent.Fd()), filepath.Base(s.path), 0700) != nil {
 		return errRefused
 	}
 	if s.files.syncFile(s.parent) != nil {
@@ -199,7 +212,7 @@ func (s *pauseStore) reserve() error {
 	}
 	return nil
 }
-func (s *pauseStore) create(name string, value any) error {
+func (s *serviceFiles) create(name string, value any) error {
 	if !s.unchanged() || s.dir == nil {
 		return errRefused
 	}

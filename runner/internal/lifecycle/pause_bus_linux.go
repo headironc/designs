@@ -20,16 +20,28 @@ const pauseManager = "org.freedesktop.systemd1"
 const pauseManagerPath = dbus.ObjectPath("/org/freedesktop/systemd1")
 
 type pauseBus struct {
+	*unitBus
+	host pauseHost
+}
+
+type unitBus struct {
 	api            *systemd.Conn
 	control        *dbus.Conn
 	signals        chan *dbus.Signal
 	owner, manager string
-	host           pauseHost
 	stops          []func() bool
 }
 
 func connectPause(ctx context.Context, socket string, host pauseHost) (pauseConnection, error) {
-	b := &pauseBus{host: host, signals: make(chan *dbus.Signal, 64)}
+	b, err := connectUnitBus(ctx, socket)
+	if err != nil {
+		return nil, err
+	}
+	return &pauseBus{b, host}, nil
+}
+
+func connectUnitBus(ctx context.Context, socket string) (*unitBus, error) {
+	b := &unitBus{signals: make(chan *dbus.Signal, 64)}
 	var connections []*dbus.Conn
 	api, err := systemd.NewConnection(func() (*dbus.Conn, error) {
 		raw, err := (&net.Dialer{}).DialContext(ctx, "unix", socket)
@@ -84,7 +96,7 @@ func connectPause(ctx context.Context, socket string, host pauseHost) (pauseConn
 	}
 	return b, nil
 }
-func (b *pauseBus) close() {
+func (b *unitBus) close() {
 	if b.api != nil {
 		b.api.Close()
 	}
@@ -92,7 +104,7 @@ func (b *pauseBus) close() {
 		stop()
 	}
 }
-func (b *pauseBus) identity(ctx context.Context) (string, error) {
+func (b *unitBus) identity(ctx context.Context) (string, error) {
 	var owner, id string
 	if b.control.BusObject().CallWithContext(ctx, "org.freedesktop.DBus.GetId", 0).Store(&id) != nil || b.control.BusObject().CallWithContext(ctx, "org.freedesktop.DBus.GetNameOwner", 0, pauseManager).Store(&owner) != nil {
 		return "", errRefused
@@ -107,9 +119,13 @@ func (b *pauseBus) identity(ctx context.Context) (string, error) {
 	return result, nil
 }
 func (b *pauseBus) stopTimer(ctx context.Context) (pauseJob, error) {
+	return b.stopUnit(ctx, pauseTimer)
+}
+
+func (b *unitBus) stopUnit(ctx context.Context, unit string) (pauseJob, error) {
 	// Preserve and validate the actual returned object path. The convenience
 	// SDK wrapper reduces it to an int, which cannot retain this wire evidence.
-	call := b.control.Object(b.owner, pauseManagerPath).CallWithContext(ctx, pauseManager+".Manager.StopUnit", dbus.FlagNoAutoStart, pauseTimer, "fail")
+	call := b.control.Object(b.owner, pauseManagerPath).CallWithContext(ctx, pauseManager+".Manager.StopUnit", dbus.FlagNoAutoStart, unit, "fail")
 	if call.Err != nil || len(call.Body) != 1 {
 		return pauseJob{}, errRefused
 	}
@@ -129,6 +145,10 @@ func (b *pauseBus) stopTimer(ctx context.Context) (pauseJob, error) {
 	return pauseJob{ID: uint32(id), Path: raw}, nil
 }
 func (b *pauseBus) event(ctx context.Context, job pauseJob) (pauseEvent, error) {
+	return b.unitEvent(ctx, job, pauseTimer)
+}
+
+func (b *unitBus) unitEvent(ctx context.Context, job pauseJob, expectedUnit string) (pauseEvent, error) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -153,7 +173,7 @@ func (b *pauseBus) event(ctx context.Context, job pauseJob) (pauseEvent, error) 
 			if id != job.ID {
 				continue
 			}
-			if string(path) != job.Path || unit != pauseTimer || !pauseJobResult(result) {
+			if string(path) != job.Path || unit != expectedUnit || !pauseJobResult(result) {
 				return pauseEvent{}, errRefused
 			}
 			return pauseEvent{ID: id, Path: string(path), Unit: unit, Sender: b.owner, Result: result}, nil
@@ -237,16 +257,8 @@ func pauseServiceConfig(s map[string]any) error {
 	if s["Type"] != "oneshot" || s["Restart"] != "no" || !pauseBool(s["RemainAfterExit"], false) || s["Slice"] != "system.slice" || s["User"] != "" && s["User"] != "root" || s["Group"] != "" && s["Group"] != "root" {
 		return errRefused
 	}
-	// systemd exposes SuccessExitStatus as (aiai): exit codes and signals.
-	success, ok := s["SuccessExitStatus"].([]any)
-	if !ok || len(success) != 2 {
+	if !emptySuccessStatus(s["SuccessExitStatus"]) {
 		return errRefused
-	}
-	for _, value := range success {
-		codes, ok := value.([]int32)
-		if !ok || len(codes) != 0 {
-			return errRefused
-		}
 	}
 	for _, key := range []string{"ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost", "ExecCondition"} {
 		rows, ok := s[key].([][]any)

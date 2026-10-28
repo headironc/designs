@@ -4,6 +4,8 @@
 
 这个结果只覆盖 timer 与原 worker。controller、gateway、凭据、guard 和外部操作仍由各自 owner 处理。worker 可能在退出前完成自己的禁用或 controller 停止操作；排空不证明那些操作成功，也不证明整个执行闭合。
 
+[Gateway 停止](gateway.md)作为下一独立消费者，持有原 `pause.lock`，再取得已有 `operation.lock`，共享严格原件核验与当前暂停观察；它不修改暂停四份原件，也不重发 timer 请求。
+
 ## 第一次请求
 
 入口要求 root、受控环境和原采集请求。采集的 producer 摘要由 root 提供；共享 loader 严格核验原请求、执行记录和完成封印，并取得准确执行字节的摘要。原采集目录保持三个文件，不在其中追加暂停材料。
