@@ -1,5 +1,5 @@
 {
-  "name": "designs-ci",
+  "name": "designs",
   "private": true,
   "type": "module",
   "packageManager": "bun@1.4.2",
@@ -8,22 +8,9 @@
   },
   "scripts": {
     "format:check": "prettier --check",
-    "format": "prettier --write",
-    "test": "node --test ci/*.test.ts ci/*.test.mjs",
-    "typecheck": "tsc --noEmit"
-  },
-  "dependencies": {
-    "@actions/artifact": "2.3.2",
-    "@azure/core-http": "3.0.4",
-    "@azure/storage-blob": "12.17.0",
-    "archiver": "7.0.1",
-    "zod": "4.6.6",
-    "unzip-stream": "0.3.4"
+    "format": "prettier --write"
   },
   "devDependencies": {
-    "@types/archiver": "6.0.3",
-    "@types/node": "26.6.4",
-    "prettier": "3.9.9",
-    "typescript": "7.0.2"
+    "prettier": "3.9.9"
   }
 }
