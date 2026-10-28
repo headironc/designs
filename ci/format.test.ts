@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
+  linkSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -49,6 +52,71 @@ test("formatting rejects escapes, symlinks and an empty supported selection", as
   ])
     await assert.rejects(formatFiles(root, files, "/unused", true));
   assert.equal(readFileSync(path.join(root, "real.ts"), "utf8"), "let x=1\n");
+});
+
+test("concurrent file and parent symlink replacement cannot redirect a format write", async (t) => {
+  for (const replaceParent of [false, true]) {
+    const base = mkdtempSync(path.join(os.tmpdir(), "designs-format-swap-"));
+    t.after(() => rmSync(base, { recursive: true, force: true }));
+    const root = path.join(base, "source");
+    const directory = path.join(root, "nested");
+    const outside = path.join(base, "outside");
+    mkdirSync(directory, { recursive: true });
+    mkdirSync(outside);
+    const original = "const value={x:1}\n";
+    writeFileSync(path.join(directory, "file.ts"), original);
+    writeFileSync(
+      path.join(outside, "file.ts"),
+      "outside must remain unchanged\n",
+    );
+    // The function reaches its first await only after opening and reading this file.
+    const pending = formatFiles(root, ["nested/file.ts"], "/unused", true);
+    if (replaceParent) {
+      renameSync(directory, path.join(root, "saved"));
+      symlinkSync(outside, directory);
+    } else {
+      renameSync(
+        path.join(directory, "file.ts"),
+        path.join(directory, "saved.ts"),
+      );
+      symlinkSync(
+        path.join(outside, "file.ts"),
+        path.join(directory, "file.ts"),
+      );
+    }
+    await assert.rejects(pending, /Source changed during formatting/);
+    assert.equal(
+      readFileSync(path.join(outside, "file.ts"), "utf8"),
+      "outside must remain unchanged\n",
+    );
+    assert.equal(
+      readFileSync(
+        replaceParent
+          ? path.join(root, "saved/file.ts")
+          : path.join(directory, "saved.ts"),
+        "utf8",
+      ),
+      original,
+    );
+  }
+});
+
+test("format repair preserves concurrent edits and refuses hardlinked files", async (t) => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "designs-format-edits-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, "file.ts");
+  writeFileSync(file, "const value=1\n");
+  const pending = formatFiles(root, ["file.ts"], "/unused", true);
+  const edited = "const value = 200;\n";
+  writeFileSync(file, edited);
+  await assert.rejects(pending, /Source changed during formatting/);
+  assert.equal(readFileSync(file, "utf8"), edited);
+  linkSync(file, path.join(root, "linked.ts"));
+  await assert.rejects(
+    formatFiles(root, ["linked.ts"], "/unused", true),
+    /is linked/,
+  );
+  assert.equal(readFileSync(file, "utf8"), edited);
 });
 
 test("the actual Go formatter rejects invalid syntax and repairs Go source", async (t) => {

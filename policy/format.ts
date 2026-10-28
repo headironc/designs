@@ -1,9 +1,16 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
+  closeSync,
+  constants,
+  fstatSync,
+  ftruncateSync,
+  lstatSync,
+  openSync,
   readFileSync,
   readdirSync,
   realpathSync,
-  writeFileSync,
+  writeSync,
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -67,32 +74,80 @@ export async function formatFiles(
     throw new Error("Formatting requires Prettier 3.9.9");
   const selected = formatPaths(files);
   if (!selected.length) throw new Error("No supported source files selected");
-  // Reuse source validation so links and paths outside the source cannot be rewritten.
-  readSourceEntries(root, selected);
+  const entries = readSourceEntries(root, selected);
   const differences: string[] = [];
-  for (const file of selected) {
+  for (const entry of entries) {
+    const file = entry.path;
     const target = path.join(root, file);
-    const original = new TextDecoder("utf-8", {
-      fatal: true,
-      ignoreBOM: true,
-    }).decode(readFileSync(target));
-    const formatted = file.endsWith(".go")
-      ? execFileSync(gofmt, [], {
-          input: original,
-          encoding: "utf8",
-          timeout: 30_000,
-          maxBuffer: 16 * 1024 * 1024,
-          env: { PATH: "/usr/bin:/bin" },
-        })
-      : await prettier.format(original, {
-          parser: parsers[path.extname(file)]!,
-          proseWrap: "preserve",
-          embeddedLanguageFormatting: "off",
-          endOfLine: "lf",
-        });
-    if (original !== formatted) {
-      differences.push(file);
-      if (write) writeFileSync(target, formatted);
+    const expected = lstatSync(target, { bigint: true });
+    const descriptor = openSync(
+      target,
+      (write ? constants.O_RDWR : constants.O_RDONLY) | constants.O_NOFOLLOW,
+    );
+    try {
+      const opened = fstatSync(descriptor, { bigint: true });
+      if (
+        !opened.isFile() ||
+        opened.ino !== expected.ino ||
+        opened.dev !== expected.dev ||
+        (write && opened.nlink !== 1n)
+      )
+        throw new Error(`Source changed or is linked: ${file}`);
+      const bytes = readFileSync(descriptor);
+      if (createHash("sha256").update(bytes).digest("hex") !== entry.sha256)
+        throw new Error(`Source changed before formatting: ${file}`);
+      const original = new TextDecoder("utf-8", {
+        fatal: true,
+        ignoreBOM: true,
+      }).decode(bytes);
+      const formatted = file.endsWith(".go")
+        ? execFileSync(gofmt, [], {
+            input: original,
+            encoding: "utf8",
+            timeout: 30_000,
+            maxBuffer: 16 * 1024 * 1024,
+            env: { PATH: "/usr/bin:/bin" },
+          })
+        : await prettier.format(original, {
+            parser: parsers[path.extname(file)]!,
+            proseWrap: "preserve",
+            embeddedLanguageFormatting: "off",
+            endOfLine: "lf",
+          });
+      if (original !== formatted) {
+        differences.push(file);
+        if (write) {
+          const current = fstatSync(descriptor, { bigint: true });
+          const named = lstatSync(target, { bigint: true });
+          if (
+            named.isSymbolicLink() ||
+            named.ino !== opened.ino ||
+            named.dev !== opened.dev ||
+            current.nlink !== 1n ||
+            current.size !== opened.size ||
+            current.mtimeNs !== opened.mtimeNs ||
+            current.ctimeNs !== opened.ctimeNs
+          )
+            throw new Error(`Source changed during formatting: ${file}`);
+          // Keep the validated inode open across async formatting; never reopen its name.
+          const output = Buffer.from(formatted);
+          let offset = 0;
+          while (offset < output.length) {
+            const written = writeSync(
+              descriptor,
+              output,
+              offset,
+              output.length - offset,
+              offset,
+            );
+            if (!written) throw new Error(`Incomplete format write: ${file}`);
+            offset += written;
+          }
+          ftruncateSync(descriptor, output.length);
+        }
+      }
+    } finally {
+      closeSync(descriptor);
     }
   }
   return differences;
