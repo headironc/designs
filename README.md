@@ -62,7 +62,7 @@ bun run test:go-tools
 bun run go:check
 ```
 
-`go:prepare` 通过官方模块代理和校验数据库下载锁定依赖。它还拉取脚本固定 digest 的 Ubuntu 26.04 Linux amd64 夹具镜像。准备成功不代表检查通过。检查阶段关闭 Go 网络代理与校验数据库。Docker 只消费已有镜像，不自动联网补装工具。Go 使用 `GOTOOLCHAIN=local`、`GOWORK=off`、`GOENV=off` 和 `GOFLAGS=-mod=readonly`，前后确认 `go.mod`/`go.sum` 未改变。继承的 `GO*` 设置与 `RUNNER_*` 夹具开关会被清除，再按对应层设置，避免将私有容器用例带到宿主。
+`go:prepare` 通过官方模块代理和校验数据库下载锁定依赖。它还拉取脚本固定 digest 的 Ubuntu 26.04 Linux amd64 夹具镜像。准备成功不代表检查通过。检查阶段关闭 Go 网络代理与校验数据库。Docker 只消费已有镜像，不自动联网补装工具。Go 使用 `GOTOOLCHAIN=local`、`GOWORK=off`、`GOENV=off` 和 `GOFLAGS=-mod=readonly`，前后确认 `go.mod`/`go.sum` 未改变。继承的 `GO*` 设置与 `RUNNER_*`、`GUARD_*`、`WATCHDOG_STOP_*` 夹具开关会被清除，再按对应层设置。外部环境不能启用测试 helper 或指定它们的状态目录与 D-Bus。
 
 默认 `go:check` 依次完成 module、container 和 nft 三层，全部通过才输出完整成功。module 运行 `go mod verify`、全模块 `go test -race -count=1`、`go vet` 和五个命令的 `CGO_ENABLED=0` Linux amd64 构建。测试使用真实私有 D-Bus。Go JSON 事件必须证明实际进程身份测试执行并通过。普通层唯一允许跳过的测试是另行隔离运行的容器用例。没有测试文件的包由 `go list` 明确识别，其他测试或包的 skip 均失败。必需测试必须恰好运行一次并给出预期终态，缺失或重复均失败。
 
@@ -72,6 +72,10 @@ container 层使用静态 lifecycle 测试产物。只读挂入一次性无网�
 
 恢复或分权限运行时，可执行 `bun run go:check --stage=module`、`--stage=container` 或 `--stage=nft`。每次只对指定层声明部分结果。首次交付或串联入口变化时验证默认全入口。后续接纳可合并同候选和适用输入下仍有效的三层证据，不重跑未变层。默认 CLI 仅在本次完整执行通过时打印完整成功。未知、空白或重复选择直接失败。`test:go-tools` 包含有界的真实子进程取消与私有 Docker 清理回归，要求先完成工具和镜像准备。
 
-CLI 为每条命令保留日志，使用独立进程组。准备总期限为 20 分钟，检查为 30 分钟；到期后仍执行有界清理。超时或收到 SIGINT/SIGTERM 时先发 TERM，再按需 KILL，并核组已结束。容器随机名称在 create 前写入本次工作目录；create/start 不自动重发。清理沿原名称与 ID 读取状态，确认停止后删除，再核名称与 ID 均消失。create 结果未知且暂未查到对象时保留 unknown，不能宣称清理完成。删除客户端报错后仍回读原对象，确认已移除才结束。
+CLI 为每条命令保留日志。准备总期限为 20 分钟，检查为 30 分钟；到期后仍执行有界清理。模块测试先用既有 Go SDK 构建仓库内的 `scripts/go-supervise.go`，产物留在本次工作目录。这个 Linux subreaper 托管唯一 `go test`，保持原 PID、UID、cgroup 与 `/proc` 视图。测试创建独立进程组或 session 后，孤儿后代仍归这个托管进程回收。只有 `wait4` 返回 `ECHILD` 才证明子孙已收齐；自身 task 的 children 列表为空不证明结束。目标正常退出但留下活后代也判失败，并继续清理。
+
+取消时托管进程先向自己的直接子进程发送 TERM，两秒后按需 KILL。读取 children 到发信号之间不并发 reap，避免 PID 被重用。八秒内无法收齐就保留 unknown。Node 给托管进程更长的十二秒清理窗口；最终强杀不证明清理完成。专用 pipe 只交给托管进程，回执另存为 `*.supervisor.log`。回执缺失、异常、清理未闭合或强杀时保留短临时目录，不用外层进程组消失补判成功。工具版本、编译等命令沿独立进程组清理；超时或取消时先 TERM，再按需 KILL。
+
+容器随机名称在 create 前写入本次工作目录；create/start 不自动重发。清理沿原名称与 ID 读取状态，确认终态后先保存日志，再删除并核名称与 ID 均消失。wait 失败或取消时仍以有界、不可取消的读取保全容器日志。原执行错误与日志读取错误分别保留；日志读取失败不跳过容器清理。create 结果未知且暂未查到对象时保留 unknown，不能宣称清理完成。删除客户端报错后仍回读原对象，确认已移除才结束。
 
 检查失败先读日志并修复对应输入或环境，再决定重跑范围。CLI 会输出有界的错误原因及原日志路径。CI 在 run 的 Artifacts 中保留 `go-check-<run_id>-<attempt>` 三天。内容为本次日志、容器句柄和测试输出，不上传 SDK、模块缓存或二进制。取消会在清理后返回失败。强制 SIGKILL、daemon 不可达或清理超时可能留下未知结果。保留日志和 `container-name.txt`，沿原名称查询，不重新 create。确认原容器终态后处理该对象；不要用删日志、换名称或启动第二份检查绕过未知结果。源码修复与依赖升级通过普通 PR 完成，原操作材料保留。完整 Go 通过仍不代表生产部署、文档结构或安全扫描已验收。

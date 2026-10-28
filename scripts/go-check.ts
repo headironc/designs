@@ -12,6 +12,7 @@ import {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
+import type { Readable } from "node:stream";
 
 const repository = path.resolve(import.meta.dirname, "..");
 const runner = path.join(repository, "runner");
@@ -64,39 +65,76 @@ export async function runCommand(
     timeoutMs: number;
     signal?: AbortSignal;
     input?: string;
+    supervisor?: string;
   },
 ): Promise<string> {
   if (options.signal?.aborted)
     throw new CommandFailure("cancelled before starting command", false);
   const log = openSync(options.log, "wx", 0o600);
+  let receiptLog: number | undefined;
+  try {
+    if (options.supervisor)
+      receiptLog = openSync(`${options.log}.supervisor.log`, "wx", 0o600);
+  } catch (error) {
+    closeSync(log);
+    throw error;
+  }
   const child = (() => {
     // Go fixtures assert exact requested file modes, independent of caller umask.
     const previous = process.umask(0o022);
     try {
-      return spawn(command, args, {
-        cwd: options.cwd,
-        env: options.env,
-        detached: true,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
+      return spawn(
+        options.supervisor ?? command,
+        options.supervisor ? [command, ...args] : args,
+        {
+          cwd: options.cwd,
+          env: options.env,
+          detached: true,
+          stdio: options.supervisor
+            ? ["pipe", "pipe", "pipe", "pipe"]
+            : ["pipe", "pipe", "pipe"],
+        },
+      );
     } catch (error) {
       closeSync(log);
+      if (receiptLog !== undefined) closeSync(receiptLog);
       throw new CommandFailure(String(error), false);
     } finally {
       process.umask(previous);
     }
   })();
   let reason: string | undefined;
+  let forced = false;
+  let supervisorClosed = false;
+  let targetStarted = false;
+  const receipt = child.stdio[3] as Readable | undefined;
+  const receiptChunks: Buffer[] = [];
+  let receiptSize = 0;
   let killTimer: NodeJS.Timeout | undefined;
   let size = 0;
   const output: Buffer[] = [];
   let stderrTail = "";
+  const forceSupervisor = () => {
+    forced = true;
+    child.kill("SIGKILL");
+    // An unknown surviving descendant may still hold the output descriptors.
+    child.stdout?.destroy();
+    child.stderr?.destroy();
+    child.stdin?.destroy();
+    receipt?.destroy();
+  };
   const stop = (message: string) => {
     if (reason) return;
     reason = message;
     if (child.pid) {
-      signalGroup(child.pid, "SIGTERM");
-      killTimer = setTimeout(() => signalGroup(child.pid!, "SIGKILL"), 2_000);
+      if (options.supervisor) {
+        child.kill("SIGTERM");
+        // The helper owns an eight-second cleanup deadline.
+        killTimer = setTimeout(forceSupervisor, 12_000);
+      } else {
+        signalGroup(child.pid, "SIGTERM");
+        killTimer = setTimeout(() => signalGroup(child.pid!, "SIGKILL"), 2_000);
+      }
     }
   };
   const abort = () => stop("cancelled");
@@ -105,7 +143,20 @@ export async function runCommand(
     () => stop(`timed out after ${options.timeoutMs} ms`),
     options.timeoutMs,
   );
-  child.stdout.on("data", (chunk: Buffer) => {
+  receipt?.on("data", (chunk: Buffer) => {
+    receiptSize += chunk.length;
+    if (receiptSize > 16 * 1024) {
+      stop("supervisor receipt exceeds 16 KiB");
+      return;
+    }
+    receiptChunks.push(chunk);
+    try {
+      writeFileSync(receiptLog!, chunk);
+    } catch (error) {
+      stop(`supervisor receipt log failed: ${String(error)}`);
+    }
+  });
+  child.stdout!.on("data", (chunk: Buffer) => {
     if (reason) return;
     size += chunk.length;
     if (size > 64 * 1024 * 1024) {
@@ -119,7 +170,7 @@ export async function runCommand(
       stop(`log write failed: ${String(error)}`);
     }
   });
-  child.stderr.on("data", (chunk: Buffer) => {
+  child.stderr!.on("data", (chunk: Buffer) => {
     if (reason) return;
     size += chunk.length;
     stderrTail = (stderrTail + chunk.toString("utf8")).slice(-4096);
@@ -135,11 +186,16 @@ export async function runCommand(
   });
   // A completed leader must not leave descendants holding pipes or doing work.
   child.once("exit", () => {
+    if (options.supervisor) {
+      clearTimeout(killTimer);
+      killTimer = setTimeout(forceSupervisor, 1_000);
+      return;
+    }
     if (child.pid && groupAlive(child.pid))
       stop("leader exited with surviving process group");
   });
-  child.stdin.on("error", () => {}); // Early child exit is handled by its final status.
-  child.stdin.end(options.input);
+  child.stdin!.on("error", () => {}); // Early child exit is handled by its final status.
+  child.stdin!.end(options.input);
   try {
     const status = await new Promise<{
       code: number | null;
@@ -148,7 +204,61 @@ export async function runCommand(
       child.once("error", reject);
       child.once("close", (code, signal) => resolve({ code, signal }));
     });
-    if (child.pid) {
+    let supervisorFailure = "";
+    if (options.supervisor) {
+      try {
+        const value: unknown = JSON.parse(
+          Buffer.concat(receiptChunks).toString("utf8"),
+        );
+        if (!Array.isArray(value) || value.length !== 6)
+          throw new Error("expected one six-field supervisor receipt");
+        const [version, pid, exitCode, signal, closed, failures] = value;
+        const integer = (number: unknown, minimum: number, maximum: number) =>
+          Number.isInteger(number) &&
+          (number as number) >= minimum &&
+          (number as number) <= maximum;
+        if (
+          version !== 1 ||
+          !integer(pid, 0, 2 ** 31 - 1) ||
+          !(exitCode === null || integer(exitCode, 0, 255)) ||
+          !(signal === null || integer(signal, 1, 64)) ||
+          typeof closed !== "boolean" ||
+          !Array.isArray(failures) ||
+          failures.some((failure) => typeof failure !== "string") ||
+          (exitCode !== null && signal !== null) ||
+          (pid === 0 &&
+            (exitCode !== null || signal !== null || failures.length === 0)) ||
+          (pid > 0 && closed && exitCode === null && signal === null)
+        )
+          throw new Error("invalid supervisor receipt fields");
+        const successful =
+          closed && pid > 0 && exitCode === 0 && failures.length === 0;
+        if (
+          status.signal !== null ||
+          status.code !== (successful ? 0 : 1) ||
+          forced ||
+          receiptSize > 16 * 1024
+        )
+          throw new Error("supervisor exit contradicts its receipt");
+        supervisorClosed = closed;
+        targetStarted = pid > 0;
+        supervisorFailure = [
+          ...failures,
+          ...(exitCode !== null && exitCode !== 0
+            ? [`target exited ${exitCode}`]
+            : []),
+          ...(signal !== null ? [`target received signal ${signal}`] : []),
+        ].join("; ");
+        if (!closed)
+          throw new Error(supervisorFailure || "supervisor cleanup is unknown");
+      } catch (error) {
+        throw new CommandFailure(
+          `${reason ? reason + "; " : ""}Supervisor cleanup unknown: ${String(error)}; supervisor PID ${child.pid}; retain temporary files and inspect original logs: ${options.log}`,
+          targetStarted,
+          false,
+        );
+      }
+    } else if (child.pid) {
       const deadline = Date.now() + 3_000;
       while (groupAlive(child.pid) && Date.now() < deadline) {
         signalGroup(child.pid, "SIGKILL");
@@ -159,7 +269,7 @@ export async function runCommand(
           `Process group ${child.pid} still exists; inspect it before retrying. Log: ${options.log}`,
         );
     }
-    if (reason || status.code !== 0 || status.signal) {
+    if (reason || status.code !== 0 || status.signal || supervisorFailure) {
       const lines = Buffer.concat(output).toString("utf8").split("\n");
       const failed = lines.findIndex((line) =>
         line.includes('"Action":"fail"'),
@@ -172,8 +282,8 @@ export async function runCommand(
         .slice(-4096)
         .trim();
       throw new CommandFailure(
-        `${command} ${reason ?? `exited ${status.code ?? status.signal}`}; log: ${options.log}${detail ? "\n" + detail : ""}`,
-        child.pid !== undefined,
+        `${command} ${reason ?? `exited ${status.code ?? status.signal}`}; log: ${options.log}${supervisorFailure ? "\n" + supervisorFailure : ""}${detail ? "\n" + detail : ""}`,
+        options.supervisor ? targetStarted : child.pid !== undefined,
       );
     }
     return Buffer.concat(output).toString("utf8");
@@ -182,13 +292,16 @@ export async function runCommand(
     throw new CommandFailure(
       `${String(error)}; log: ${options.log}`,
       child.pid !== undefined,
-      child.pid === undefined || !groupAlive(child.pid),
+      options.supervisor
+        ? supervisorClosed
+        : child.pid === undefined || !groupAlive(child.pid),
     );
   } finally {
     clearTimeout(timeout);
     clearTimeout(killTimer);
     options.signal?.removeEventListener("abort", abort);
     closeSync(log);
+    if (receiptLog !== undefined) closeSync(receiptLog);
   }
 }
 
@@ -271,7 +384,10 @@ function goEnvironment(prepare: boolean): NodeJS.ProcessEnv {
   // Fixture switches and ambient Go settings must not redirect the host tests.
   const env = Object.fromEntries(
     Object.entries(process.env).filter(
-      ([key]) => !key.startsWith("GO") && !key.startsWith("RUNNER_"),
+      ([key]) =>
+        !["GO", "RUNNER_", "GUARD_", "WATCHDOG_STOP_"].some((prefix) =>
+          key.startsWith(prefix),
+        ),
     ),
   );
   return {
@@ -322,6 +438,7 @@ export async function checkGo(
         env?: NodeJS.ProcessEnv;
         cleanup?: boolean;
         input?: string;
+        supervisor?: string;
       } = {},
     ) => {
       const label = `${String(++sequence).padStart(2, "0")}-${path.basename(command)}.log`;
@@ -333,6 +450,7 @@ export async function checkGo(
         timeoutMs: settings.timeoutMs ?? 120_000,
         signal: settings.cleanup ? undefined : signal,
         input: settings.input,
+        supervisor: settings.supervisor,
       }).catch((error) => {
         if (error instanceof CommandFailure && !error.groupClosed)
           temporaryClosed = false;
@@ -367,6 +485,21 @@ export async function checkGo(
         )
           .split("\n")
           .filter(Boolean);
+        const supervisor = path.join(work, "go-supervise");
+        await run(
+          "go",
+          [
+            "build",
+            "-trimpath",
+            "-o",
+            supervisor,
+            path.join(repository, "scripts/go-supervise.go"),
+          ],
+          {
+            env: { ...env, CGO_ENABLED: "0" },
+            timeoutMs: 120_000,
+          },
+        );
         const raw = await run(
           "go",
           [
@@ -378,7 +511,7 @@ export async function checkGo(
             "-json",
             "./...",
           ],
-          { timeoutMs: 1_800_000 },
+          { timeoutMs: 1_800_000, supervisor },
         );
         verifyTestEvents(raw, stage, noTests);
         await run("go", ["vet", "./..."], { timeoutMs: 600_000 });
@@ -437,6 +570,9 @@ export async function checkGo(
           ) as { Running: boolean; Status: string; ExitCode: number };
         let createStarted = false;
         let createConfirmed = false;
+        let exit: string | undefined;
+        let raw: string | undefined;
+        const containerFailures: unknown[] = [];
         try {
           try {
             createStarted = true;
@@ -463,91 +599,120 @@ export async function checkGo(
             throw error;
           }
           await docker(["start", name]);
-          const exit = (await docker(["wait", name])).trim();
-          const raw = await docker(["logs", name]);
-          writeFileSync(path.join(work, "container-test-output.txt"), raw, {
-            mode: 0o600,
-          });
-          const events = await run(
-            "go",
-            ["tool", "test2json", "-p", lifecycle],
-            { input: raw },
-          );
-          verifyTestEvents(events, stage);
-          if (exit !== "0")
-            throw new Error(`Private container ${name} exited ${exit}`);
+          exit = (await docker(["wait", name])).trim();
+        } catch (error) {
+          containerFailures.push(error);
         } finally {
-          // Create/start can have succeeded even when their client returned an error.
-          // Recover only this pre-recorded name; never repeat creation or start.
-          const id = await findContainer();
-          if (!id && createStarted && !createConfirmed)
-            throw new Error(
-              `Container creation outcome unknown: ${name}; currently absent does not prove creation ended. Retain ${work} and resolve this original name before retrying.`,
-            );
-          if (id) {
-            let current = await state(id);
-            if (current.Running) {
-              try {
-                await docker(["stop", "--time=2", id], true);
-              } catch (error) {
-                console.error(
-                  `Stop result requires readback for ${id}: ${String(error)}`,
-                );
-              }
-              current = await state(id);
+          try {
+            // Create/start can have succeeded even when their client returned an error.
+            // Recover only this pre-recorded name; never repeat creation or start.
+            const id = await findContainer();
+            if (!id && createStarted && !createConfirmed)
+              throw new Error(
+                `Container creation outcome unknown: ${name}; currently absent does not prove creation ended. Retain ${work} and resolve this original name before retrying.`,
+              );
+            if (id) {
+              let current = await state(id);
               if (current.Running) {
                 try {
-                  await docker(["kill", id], true);
+                  await docker(["stop", "--time=2", id], true);
                 } catch (error) {
                   console.error(
-                    `Kill result requires readback for ${id}: ${String(error)}`,
+                    `Stop result requires readback for ${id}: ${String(error)}`,
                   );
                 }
                 current = await state(id);
+                if (current.Running) {
+                  try {
+                    await docker(["kill", id], true);
+                  } catch (error) {
+                    console.error(
+                      `Kill result requires readback for ${id}: ${String(error)}`,
+                    );
+                  }
+                  current = await state(id);
+                }
               }
-            }
-            if (
-              current.Running ||
-              !["exited", "created", "dead"].includes(current.Status)
-            )
-              throw new Error(
-                `Container ${id} is not terminal; retain ${work} and resolve it before retrying`,
-              );
-            console.log(
-              `Container terminal: ${id} ${current.Status} exit=${current.ExitCode}`,
-            );
-            let removalError: unknown;
-            try {
-              await docker(["rm", id], true);
-            } catch (error) {
-              removalError = error;
-            }
-            const remainingId = (
-              await docker(
-                [
-                  "container",
-                  "ls",
-                  "--all",
-                  "--no-trunc",
-                  "--filter",
-                  `id=${id}`,
-                  "--format",
-                  "{{.ID}}",
-                ],
-                true,
+              if (
+                current.Running ||
+                !["exited", "created", "dead"].includes(current.Status)
               )
-            ).trim();
-            if (remainingId || (await findContainer()))
-              throw new Error(
-                `Container ${name}/${id} removal unresolved: ${String(removalError ?? "still present")}; retain ${work}`,
-              );
-            if (removalError)
+                throw new Error(
+                  `Container ${id} is not terminal; retain ${work} and resolve it before retrying`,
+                );
               console.log(
-                `Removal confirmed by readback after client error: ${id}`,
+                `Container terminal: ${id} ${current.Status} exit=${current.ExitCode}`,
               );
+              try {
+                raw = await docker(["logs", id], true);
+                writeFileSync(
+                  path.join(work, "container-test-output.txt"),
+                  raw,
+                  {
+                    mode: 0o600,
+                  },
+                );
+              } catch (error) {
+                containerFailures.push(
+                  new Error(
+                    `Container diagnostics failed for ${name}/${id}: ${String(error)}`,
+                    { cause: error },
+                  ),
+                );
+              }
+              let removalError: unknown;
+              try {
+                await docker(["rm", id], true);
+              } catch (error) {
+                removalError = error;
+              }
+              const remainingId = (
+                await docker(
+                  [
+                    "container",
+                    "ls",
+                    "--all",
+                    "--no-trunc",
+                    "--filter",
+                    `id=${id}`,
+                    "--format",
+                    "{{.ID}}",
+                  ],
+                  true,
+                )
+              ).trim();
+              if (remainingId || (await findContainer()))
+                throw new Error(
+                  `Container ${name}/${id} removal unresolved: ${String(removalError ?? "still present")}; retain ${work}`,
+                );
+              if (removalError)
+                console.log(
+                  `Removal confirmed by readback after client error: ${id}`,
+                );
+            }
+            console.log(`Private container absent: ${name}`);
+          } catch (error) {
+            containerFailures.push(error);
           }
-          console.log(`Private container absent: ${name}`);
         }
+        if (containerFailures.length === 1) throw containerFailures[0];
+        if (containerFailures.length > 1)
+          throw new AggregateError(
+            containerFailures,
+            containerFailures
+              .map((error) =>
+                error instanceof Error ? error.message : String(error),
+              )
+              .join("\n"),
+          );
+        if (raw === undefined)
+          throw new Error(`Container diagnostics unavailable: ${name}`);
+        const events = await run("go", ["tool", "test2json", "-p", lifecycle], {
+          input: raw,
+        });
+        verifyTestEvents(events, stage);
+        if (exit !== "0")
+          throw new Error(`Private container ${name} exited ${exit}`);
       } else {
         const raw = await run(
           "go",

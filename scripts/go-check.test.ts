@@ -14,7 +14,12 @@ import {
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { parseMode, runCommand, verifyTestEvents } from "./go-check.ts";
+import {
+  CommandFailure,
+  parseMode,
+  runCommand,
+  verifyTestEvents,
+} from "./go-check.ts";
 
 const repository = path.resolve(import.meta.dirname, "..");
 const cli = path.join(import.meta.dirname, "go-check.ts");
@@ -179,6 +184,208 @@ test("command timeout escalates and cancellation reaps the command's real child"
   }
 });
 
+test("module supervision reaps separate groups and sessions without affecting another process", async (t) => {
+  const root = fixture(t);
+  const supervisor = path.join(root, "go-supervise");
+  const target = path.join(root, "descendants");
+  const source = path.join(root, "descendants.go");
+  writeFileSync(
+    source,
+    `package main
+import("encoding/json"; "os"; "os/exec"; "os/signal"; "strings"; "syscall"; "time")
+func main() {
+  mode, marker := os.Args[1], os.Args[2]
+  if mode == "leaf" {
+    signal.Ignore(syscall.SIGTERM, syscall.SIGINT)
+    raw, _ := os.ReadFile("/proc/self/stat")
+    fields := strings.Fields(string(raw)[strings.LastIndex(string(raw), ")")+2:])
+    value, _ := json.Marshal(map[string]any{"pid":os.Getpid(),"start":fields[19]})
+    if err := os.WriteFile(marker, value, 0600); err != nil { panic(err) }
+  } else {
+    child := exec.Command(os.Args[0], "leaf", marker)
+    child.SysProcAttr = &syscall.SysProcAttr{Setpgid: !strings.HasSuffix(mode,"session"), Setsid: strings.HasSuffix(mode,"session")}
+    if err := child.Start(); err != nil { panic(err) }
+    limit := time.Now().Add(5*time.Second)
+    for { if _, err := os.Stat(marker); err == nil { break }; if time.Now().After(limit) { panic("leaf did not start") }; time.Sleep(time.Millisecond) }
+    if strings.HasPrefix(mode,"orphan") { return }
+    signal.Ignore(syscall.SIGTERM, syscall.SIGINT)
+  }
+  for { time.Sleep(time.Second) }
+}
+`,
+  );
+  const buildEnv = {
+    ...process.env,
+    GOTOOLCHAIN: "local",
+    GOWORK: "off",
+    GOENV: "off",
+    CGO_ENABLED: "0",
+    GOCACHE: path.join(repository, "runner/.build/go-cache"),
+    GOMODCACHE: path.join(repository, "runner/.build/go-mod"),
+  };
+  execFileSync(
+    "go",
+    [
+      "build",
+      "-o",
+      supervisor,
+      path.join(repository, "scripts/go-supervise.go"),
+    ],
+    { env: buildEnv, timeout: 120000 },
+  );
+  execFileSync("go", ["build", "-o", target, source], {
+    env: buildEnv,
+    timeout: 120000,
+  });
+  const unrelated = spawn(
+    process.execPath,
+    ["-e", "setInterval(() => {}, 1000)"],
+    { stdio: "ignore" },
+  );
+  const unrelatedClosed = new Promise<void>((resolve) =>
+    unrelated.once("close", () => resolve()),
+  );
+  t.after(async () => {
+    unrelated.kill("SIGKILL");
+    await unrelatedClosed;
+  });
+  let sequence = 0;
+  const options = () => ({
+    cwd: root,
+    env: process.env,
+    log: path.join(root, `${++sequence}.log`),
+    timeoutMs: 10000,
+    supervisor,
+  });
+  const completeFailure = (error: unknown) => {
+    assert.ok(error instanceof CommandFailure);
+    assert.equal(error.groupClosed, true, error.message);
+    return true;
+  };
+  await t.test(
+    "normal success, target failure and target start failure retain separate cleanup facts",
+    async () => {
+      assert.equal(
+        (
+          await runCommand(
+            process.execPath,
+            ["-e", "console.log('success')"],
+            options(),
+          )
+        ).trim(),
+        "success",
+      );
+      await assert.rejects(
+        runCommand(process.execPath, ["-e", "process.exit(7)"], options()),
+        (error: unknown) => {
+          completeFailure(error);
+          assert.match((error as Error).message, /target exited 7/);
+          return true;
+        },
+      );
+      await assert.rejects(
+        runCommand(path.join(root, "missing-command"), [], options()),
+        (error: unknown) => {
+          completeFailure(error);
+          assert.equal((error as CommandFailure).started, false);
+          return true;
+        },
+      );
+    },
+  );
+  type Identity = { pid: number; start: string };
+  const identities: Identity[] = [];
+  const alive = (identity: Identity) => {
+    try {
+      const raw = readFileSync(`/proc/${identity.pid}/stat`, "utf8");
+      return (
+        raw.slice(raw.lastIndexOf(")") + 2).split(" ")[19] === identity.start
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+  };
+  t.after(() => {
+    for (const identity of identities)
+      if (alive(identity)) process.kill(identity.pid, "SIGKILL");
+  });
+  for (const mode of [
+    "orphan-group",
+    "orphan-session",
+    "cancel-group",
+    "timeout-session",
+  ] as const) {
+    await t.test(mode, async () => {
+      const marker = path.join(root, `${mode}.json`);
+      const controller = new AbortController();
+      const pending = runCommand(target, [mode, marker], {
+        ...options(),
+        signal: controller.signal,
+        timeoutMs: mode === "timeout-session" ? 500 : 10000,
+      });
+      const rejected = assert.rejects(pending, (error: unknown) => {
+        completeFailure(error);
+        assert.match(
+          (error as Error).message,
+          mode.startsWith("orphan")
+            ? /surviving descendants/
+            : mode.startsWith("cancel")
+              ? /cancelled/
+              : /timed out/,
+        );
+        return true;
+      });
+      const deadline = Date.now() + 5000;
+      while (!existsSync(marker) && Date.now() < deadline) await delay(10);
+      assert.ok(
+        existsSync(marker),
+        `${mode} did not create its real descendant`,
+      );
+      const identity = JSON.parse(readFileSync(marker, "utf8")) as Identity;
+      identities.push(identity);
+      if (mode.startsWith("cancel")) controller.abort();
+      await rejected;
+      assert.equal(
+        alive(identity),
+        false,
+        `${mode} left its descendant alive or unreaped`,
+      );
+      assert.equal(unrelated.exitCode, null);
+      assert.equal(unrelated.signalCode, null);
+      assert.doesNotThrow(() => process.kill(unrelated.pid!, 0));
+    });
+  }
+  await t.test(
+    "missing, malformed and forcibly terminated supervisor receipts remain unknown",
+    async () => {
+      for (const body of [
+        "process.exit(0)",
+        "require('node:fs').writeSync(3, '[1,2,0,null,true,[]]\\n[1,2,0,null,true,[]]\\n')",
+        "require('node:fs').writeSync(3, '[2,2,0,null,true,[]]\\n')",
+        "process.kill(process.pid, 'SIGKILL')",
+      ]) {
+        const broken = path.join(root, `broken-${sequence}`);
+        writeFileSync(broken, `#!${process.execPath}\n${body}\n`, {
+          mode: 0o755,
+        });
+        await assert.rejects(
+          runCommand(process.execPath, ["-e", "process.exit(0)"], {
+            ...options(),
+            supervisor: broken,
+          }),
+          (error: unknown) => {
+            assert.ok(error instanceof CommandFailure);
+            assert.equal(error.groupClosed, false);
+            assert.match(error.message, /Supervisor cleanup unknown/);
+            return true;
+          },
+        );
+      }
+    },
+  );
+});
+
 function fakeGo(
   root: string,
   mode:
@@ -194,13 +401,17 @@ function fakeGo(
   const script = `#!${process.execPath}
     const fs = require("node:fs");
     const args = process.argv.slice(2);
-    if(Object.keys(process.env).some(key => key.startsWith("RUNNER_")) || process.env.GOROOT || process.env.GOFLAGS !== "-mod=readonly" || process.env.GOPROXY !== (${JSON.stringify(mode)} === "prepare-lock-change" ? "https://proxy.golang.org" : "off")) { console.error("ambient Go or fixture settings leaked"); process.exit(91); }
+    if(Object.keys(process.env).some(key => ["RUNNER_", "GUARD_", "WATCHDOG_STOP_"].some(prefix => key.startsWith(prefix))) || process.env.GOROOT || process.env.GOFLAGS !== "-mod=readonly" || process.env.GOPROXY !== (${JSON.stringify(mode)} === "prepare-lock-change" ? "https://proxy.golang.org" : "off")) { console.error("ambient Go or fixture settings leaked"); process.exit(91); }
     if (args[0] === "version") { console.log("go version go1.27.3 linux/amd64"); process.exit(0); }
     if (args[0] === "mod" && args[1] === "download" && ${JSON.stringify(mode)} === "prepare-lock-change") { fs.appendFileSync("go.sum", "changed\\n"); process.exit(0); }
+    if (args[0] === "build" && args.at(-1).endsWith("go-supervise.go")) {
+      const result = require("node:child_process").spawnSync("go", args, {env:{...process.env,PATH:${JSON.stringify(process.env.PATH)}},stdio:"inherit"});
+      process.exit(result.status ?? 1);
+    }
     if (args[0] === "test" && args.includes("-c")) {
       const body = ${JSON.stringify(mode)} === "container-pass"
         ? "#!/bin/sh\\nprintf '=== RUN   TestDatabaseChildInPrivateContainer\\n--- PASS: TestDatabaseChildInPrivateContainer (0.00s)\\nPASS\\n'\\n"
-        : "#!/bin/sh\\nexec sleep 120\\n";
+        : "#!/bin/sh\\nprintf 'private container started before cancellation\\n'\\nexec sleep 120\\n";
       fs.writeFileSync(args[args.indexOf("-o")+1], body, {mode:0o755}); process.exit(0);
     }
     if (args[0] === "tool") {
@@ -332,6 +543,14 @@ test("the actual CLI fails for a missing tool, test failure and unexpected skip"
         ...process.env,
         PATH: mode === "missing" ? root : `${root}:${process.env.PATH}`,
         RUNNER_DIAGNOSTIC_PRIVATE_CONTAINER: "1",
+        GUARD_CREATE_HELPER: path.join(root, "external-create"),
+        GUARD_WRITE_COMMAND: "DeleteInstance",
+        GUARD_LOCK_HELPER: path.join(root, "external-lock"),
+        GUARD_TX_ROOT: path.join(root, "external-state"),
+        GUARD_TX_PHASE: "renamed",
+        WATCHDOG_STOP_HELPER: "1",
+        WATCHDOG_STOP_DIR: path.join(root, "external-stop"),
+        WATCHDOG_STOP_BUS: "unix:path=/unreachable-fixture-bus",
         GOROOT: "/wrong-sdk",
       },
       encoding: "utf8",
@@ -361,6 +580,10 @@ function isolatedCLI(root: string): string {
   mkdirSync(path.join(root, "runner"));
   const copied = path.join(root, "scripts/go-check.ts");
   writeFileSync(copied, readFileSync(cli));
+  writeFileSync(
+    path.join(root, "scripts/go-supervise.go"),
+    readFileSync(path.join(repository, "scripts/go-supervise.go")),
+  );
   writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
   writeFileSync(
     path.join(root, "runner/go.mod"),
@@ -433,7 +656,8 @@ test("stage failures preserve their diagnostics alongside changed or unreadable 
     });
     assert.ifError(result.error);
     assert.equal(result.status, 1, result.stdout + result.stderr);
-    assert.match(result.stderr, /go exited 3; log: .*06-go\.log/);
+    assert.match(result.stderr, /go exited 1; log: .*\d+-go\.log/);
+    assert.match(result.stderr, /target exited 3/);
     assert.match(result.stderr, /intentional test command failure/);
     assert.match(result.stderr, /Module lock verification failed for go\.sum/);
     assert.match(
@@ -569,6 +793,83 @@ test("create uncertainty stays unknown and lost replies are resolved against the
         );
         assert.match(result.stdout, /Private container absent/);
       }
+    } finally {
+      if (name) cleanupContainer(name, dockerExecutable);
+    }
+  }
+});
+
+test("failed container wait retains terminal logs and reports log failures without replay", (t) => {
+  const dockerExecutable = resolveExecutable("docker", process.env.PATH ?? "");
+  for (const logFailure of [false, true]) {
+    const root = fixture(t);
+    fakeGo(root, "container-pass");
+    const calls = path.join(root, "docker-calls");
+    writeFileSync(
+      path.join(root, "docker"),
+      `#!${process.execPath}
+      const fs = require("node:fs");
+      const {spawnSync} = require("node:child_process");
+      const args = process.argv.slice(2);
+      fs.appendFileSync(${JSON.stringify(calls)}, args[0] + "\\n");
+      if (args[0] === "logs" && ${JSON.stringify(logFailure)}) { console.error("intentional diagnostic read failure"); process.exit(8); }
+      const result = spawnSync(${JSON.stringify(dockerExecutable)}, args, {stdio:args[0] === "wait" ? "pipe" : "inherit", timeout:10000});
+      if (args[0] === "wait" && result.status === 0) { console.error("intentional wait response failure"); process.exit(9); }
+      process.exit(result.status ?? 1);
+    `,
+      { mode: 0o755 },
+    );
+    const result = spawnSync(process.execPath, [cli, "--stage=container"], {
+      cwd: repository,
+      env: { ...process.env, PATH: `${root}:${process.env.PATH}` },
+      encoding: "utf8",
+      timeout: 20000,
+    });
+    const name = /Private container handle: (designs-go-[a-f0-9-]+)/.exec(
+      result.stdout ?? "",
+    )?.[1];
+    try {
+      assert.ifError(result.error);
+      assert.ok(name, result.stdout + result.stderr);
+      assert.equal(result.status, 1, result.stdout + result.stderr);
+      assert.match(result.stderr, /intentional wait response failure/);
+      if (logFailure) {
+        assert.match(result.stderr, /Container diagnostics failed/);
+        assert.match(result.stderr, /intentional diagnostic read failure/);
+      } else {
+        const work = /Go check logs and artifacts: (.+)/.exec(
+          result.stdout,
+        )?.[1];
+        assert.ok(work, result.stdout);
+        assert.match(
+          readFileSync(path.join(work, "container-test-output.txt"), "utf8"),
+          /PASS: TestDatabaseChildInPrivateContainer/,
+        );
+      }
+      assert.match(result.stdout, /Private container absent/);
+      assert.doesNotMatch(
+        result.stdout,
+        /Partial Go check passed|Complete Go check passed/,
+      );
+      const commands = readFileSync(calls, "utf8").trim().split("\n");
+      for (const command of ["create", "start", "wait", "logs", "rm"])
+        assert.equal(commands.filter((value) => value === command).length, 1);
+      assert.equal(
+        execFileSync(
+          dockerExecutable,
+          [
+            "container",
+            "ls",
+            "--all",
+            "--filter",
+            `name=^/${name}$`,
+            "--format",
+            "{{.ID}}",
+          ],
+          { encoding: "utf8", timeout: 10000 },
+        ).trim(),
+        "",
+      );
     } finally {
       if (name) cleanupContainer(name, dockerExecutable);
     }
@@ -759,12 +1060,34 @@ test("CLI cancellation and forced termination leave no owned Docker fixture", as
         { encoding: "utf8", timeout: 10_000 },
       ).trim();
       assert.equal(network, "none");
+      if (signal === "SIGTERM") {
+        let logs = "";
+        const logging = Date.now() + 5000;
+        while (
+          !logs.includes("private container started before cancellation") &&
+          Date.now() < logging
+        ) {
+          logs = execFileSync(dockerExecutable, ["logs", name], {
+            encoding: "utf8",
+            timeout: 10000,
+          });
+          if (!logs.includes("private container started before cancellation"))
+            await delay(10);
+        }
+        assert.match(logs, /private container started before cancellation/);
+      }
       child.kill(signal);
       const status = await finished;
       if (signal === "SIGTERM") {
         assert.equal(status, 130, output + errors);
         assert.match(output, /Container terminal:/);
         assert.match(output, /Private container absent:/);
+        const work = /Go check logs and artifacts: (.+)/.exec(output)?.[1];
+        assert.ok(work, output);
+        assert.match(
+          readFileSync(path.join(work, "container-test-output.txt"), "utf8"),
+          /private container started before cancellation/,
+        );
         assert.equal(
           execFileSync(
             dockerExecutable,
