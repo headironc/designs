@@ -103,4 +103,4 @@ ScaleSet 轮询看到 provider 空列表后，可能请求 GitHub 注销并推�
 
 来源是保全包 `halo-20261026/` 中 `vm-restore-guard-pin-20261026/manage-records-only.py` 的 `Window` 调用链，以及 `vm-session-receipt-recovery-20261027/records_only.py` 的数据库读取和启动资格规则。前者分别拥有 issue/start/cleanup/stop/restore/retire；后者没有独立签发维护资格。本文保留职责和故障约束，不承诺复制两份文件即可形成可部署版本。
 
-当前 Go 源码尚缺完整原执行记录生成、跨平台闭合观察、上述维护窗口和正常服务恢复。原记录生成的行为来源另见同一保全包 `vm-restore-guard-pin-20261026/lifecycle.py` 的 `init`、`allocated` 和 `capture_start`；这些旧入口不是新 Go 程序的兼容消费者。历史版本与真实新 repository 绑定由原运行 owner 确认；现有残留操作继续沿其原程序恢复。实现片绑定具体来源、Go 成品和依赖版本，再提交匹配检查。本文既不选择现场许可，也不改变现有 Go 拒绝行为。
+Go 已交付 [原执行采集](execution.md)、[跨平台闭合诊断](closure.md)、[watchdog 暂停](pause.md)和 [gateway 停止](gateway.md)。本片新增 [历史 prepare 原件观察](prepare-evidence.md)，只核准确五件与 staging，保留来源和外部前态缺口，不恢复旧请求。上述维护窗口和正常服务恢复仍未交付。原记录生成的行为来源另见同一保全包 `vm-restore-guard-pin-20261026/lifecycle.py` 的 `init`、`allocated` 和 `capture_start`；这些旧入口不是新 Go 程序的兼容消费者。历史版本与真实新 repository 绑定由原运行 owner 确认；残留操作保留原身份与未知结果，不因本片观察而重发或迁移。实现片绑定具体来源、Go 成品和依赖版本，再提交匹配检查。本文既不选择现场许可，也不改变现有 Go 拒绝行为。
