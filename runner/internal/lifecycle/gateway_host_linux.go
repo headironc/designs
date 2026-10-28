@@ -17,6 +17,9 @@ type gatewayHost struct {
 	proc, cgroup         string
 	realFS               bool
 	nginx, controllerExe string
+	// Synthetic proc fixtures can synchronize changes between observations.
+	afterStat       func()
+	beforeFinalRead func()
 }
 
 func processIDs(raw []byte) (uint32, uint32, error) {
@@ -80,6 +83,9 @@ func (h gatewayHost) process(pid uint32, unit string, original *serviceProcess) 
 		return out, errRefused
 	}
 	out.Start = start
+	if !h.realFS && h.afterStat != nil {
+		h.afterStat()
+	}
 	status, err := readAt(dir, "status", 64*1024)
 	if os.IsNotExist(err) {
 		return out, errPauseBusy
@@ -105,63 +111,89 @@ func (h gatewayHost) process(pid uint32, unit string, original *serviceProcess) 
 	group := "0::/system.slice/" + unit
 	member := strings.TrimSuffix(string(membership), "\n")
 	deleted := member == group+" (deleted)"
-	if member != group && !(deleted && original != nil && reapingState(state)) {
+	if member != group && !(deleted && original != nil) {
 		return out, errRefused
 	}
-	if reapingState(state) {
-		if original == nil {
-			return out, errRefused
-		}
-		out.ExecutableDevice, out.ExecutableInode, out.ExecutableSHA = original.ExecutableDevice, original.ExecutableInode, original.ExecutableSHA
-	} else {
-		if deleted {
-			return out, errRefused
-		}
+	needsReaping := deleted || reapingState(state)
+	if needsReaping && original == nil {
+		return out, errRefused
+	}
+	// The first stat may still say live after the process has begun reaping.
+	// Missing exe or deleted membership needs a final identity/state check;
+	// a successfully observed different image remains an immediate conflict.
+	observeImage := func() error {
 		link := make([]byte, 4096)
 		n, e := unix.Readlinkat(int(dir.Fd()), "exe", link)
-		if e != nil || string(link[:n]) != executable {
-			return out, errRefused
+		if e != nil {
+			return e
+		}
+		if string(link[:n]) != executable {
+			return errRefused
 		}
 		fd, e := unix.Openat(int(dir.Fd()), "exe", unix.O_RDONLY|unix.O_CLOEXEC, 0)
 		if e != nil {
-			if os.IsNotExist(e) {
-				return out, errPauseBusy
-			}
-			return out, errRefused
+			return e
 		}
 		image := os.NewFile(uintptr(fd), "service-image")
 		defer image.Close()
 		var st unix.Stat_t
 		e = unix.Fstat(fd, &st)
 		if e != nil || st.Mode&unix.S_IFMT != unix.S_IFREG || st.Mode&0022 != 0 || st.Mode&0111 == 0 || st.Nlink != 1 || h.realFS && st.Uid != 0 || !samePath(image, executable) {
-			return out, errRefused
+			return errRefused
 		}
 		if h.realFS && (protectedFiles{uid: 0, boundary: "/"}).parents(executable) != nil {
-			return out, errRefused
+			return errRefused
 		}
 		sum := sha256.New()
 		count, e := io.Copy(sum, io.LimitReader(image, 256*1024*1024+1))
 		if e != nil || count > 256*1024*1024 {
-			return out, errRefused
+			return errRefused
 		}
 		out.ExecutableDevice, out.ExecutableInode, out.ExecutableSHA = st.Dev, st.Ino, fmt.Sprintf("%x", sum.Sum(nil))
+		if original != nil && out != *original {
+			return errRefused
+		}
 		check, e := unix.Openat(int(dir.Fd()), "exe", unix.O_RDONLY|unix.O_CLOEXEC, 0)
 		if e != nil {
-			if os.IsNotExist(e) {
-				return out, errPauseBusy
-			}
-			return out, errRefused
+			return e
 		}
 		var imageAgain unix.Stat_t
 		e = unix.Fstat(check, &imageAgain)
 		unix.Close(check)
 		if e != nil || imageAgain.Dev != st.Dev || imageAgain.Ino != st.Ino || !samePath(image, executable) {
-			return out, errRefused
+			return errRefused
 		}
-		if original != nil && out != *original {
-			return out, errRefused
-		}
+		return nil
 	}
+	if e := observeImage(); e != nil {
+		if !os.IsNotExist(e) || original == nil {
+			return out, errRefused
+		}
+		needsReaping = true
+		out.ExecutableDevice, out.ExecutableInode, out.ExecutableSHA = original.ExecutableDevice, original.ExecutableInode, original.ExecutableSHA
+	}
+	if !h.realFS && h.beforeFinalRead != nil {
+		h.beforeFinalRead()
+	}
+	statusAgain, e := readAt(dir, "status", 64*1024)
+	if os.IsNotExist(e) {
+		return out, errPauseBusy
+	}
+	uid, gid, idsErr := processIDs(statusAgain)
+	if e != nil || idsErr != nil || uid != out.UID || gid != out.GID {
+		return out, errRefused
+	}
+	membershipAgain, e := readAt(dir, "cgroup", 4096)
+	if os.IsNotExist(e) {
+		return out, errPauseBusy
+	}
+	memberAgain := strings.TrimSuffix(string(membershipAgain), "\n")
+	deletedAgain := memberAgain == group+" (deleted)"
+	if e != nil || memberAgain != group && !(original != nil && deletedAgain) {
+		return out, errRefused
+	}
+	// Read state after the final membership as well: deletion can begin after
+	// image inspection, and that later observation needs its own reaping proof.
 	again, err := readAt(dir, "stat", 8192)
 	if os.IsNotExist(err) {
 		return out, errPauseBusy
@@ -170,15 +202,7 @@ func (h gatewayHost) process(pid uint32, unit string, original *serviceProcess) 
 		return out, err
 	}
 	end, endState, err := statIdentity(again, int64(pid))
-	if err != nil || end != start || deleted && !reapingState(endState) {
-		return out, errRefused
-	}
-	statusAgain, e := readAt(dir, "status", 64*1024)
-	if os.IsNotExist(e) {
-		return out, errPauseBusy
-	}
-	uid, gid, idsErr := processIDs(statusAgain)
-	if e != nil || idsErr != nil || uid != out.UID || gid != out.GID {
+	if err != nil || end != start || (needsReaping || deletedAgain) && !reapingState(endState) {
 		return out, errRefused
 	}
 	if !samePath(dir, path) {

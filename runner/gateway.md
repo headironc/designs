@@ -57,6 +57,8 @@
 
 原事件 done 后，程序等待原 Main/Control PID 消失和原 cgroup 无 live 后代。原 PID 的 Z/X/x 回收态仍须匹配原 starttime、UID/GID 和原 cgroup；原路径的 `(deleted)` 只在已知原身份回收时允许。回收态仍待 PID 消失。`populated=0` 不证明所有 zombie 均已 reaped，也不声称枚举了其他 zombie。
 
+首次 stat 仍为 live，而后续出现原 deleted cgroup 或 exe 消失时，程序沿同一 PID descriptor 再核 UID/GID 和 membership，随后确认准确 starttime 与最终回收态。准确原进程只继续等待；已观察的不同 image、身份或 cgroup 对象仍拒绝。
+
 同名 cgroup 替换、PID 复用、invocation/配置改变、gateway 重激活或迟到 job 均拒绝。已观察的身份冲突先于暂态等待；原 PID 回收不能掩盖 cgroup inode 替换。两次 unit 快照保留后一次事实，不用旧快照覆盖已观察的冲突。
 
 如果事件存在但 drain 尚未封存，恢复必须从仍存活的原 controller 核回发送窗口；controller 已停止或换实例时，保留原 job/event 并报告 `controller_window_unknown`，不补造历史。完整有效 drain 已保存 `controller_after` 后，恢复和诊断不再要求 controller 当前 active，允许后续独立授权的 controller 停止。

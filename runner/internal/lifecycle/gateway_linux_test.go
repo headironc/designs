@@ -139,6 +139,10 @@ func (p *gatewayFixtureProperties) GetAll(iface string) (map[string]dbus.Variant
 				raw["FailureAction"] = true
 			case "reverse_stop":
 				raw["RequiredBy"] = []string{controllerUnit}
+			case "propagates_stop":
+				raw["PropagatesStopTo"] = []string{controllerUnit}
+			case "stop_propagated_from":
+				raw["StopPropagatedFrom"] = []string{controllerUnit}
 			case "hook":
 				raw["OnSuccess"] = []string{"other.service"}
 			case "wants_unused":
@@ -369,7 +373,7 @@ func TestGatewayOriginalResultAndControllerLaterStop(t *testing.T) {
 }
 
 func TestGatewayUnsafeLoadedConfigurationsRefuseBeforeSend(t *testing.T) {
-	for _, mode := range []string{"failure_action", "success_action", "job_timeout_action", "missing_action", "wrong_action", "reverse_stop", "hook", "wants_unused", "requisite_unused", "controller_unused", "firewall_unused", "kill_mode", "kill_type", "dynamic_missing", "exec_order", "success_exit", "success_signal"} {
+	for _, mode := range []string{"failure_action", "success_action", "job_timeout_action", "missing_action", "wrong_action", "reverse_stop", "propagates_stop", "stop_propagated_from", "hook", "wants_unused", "requisite_unused", "controller_unused", "firewall_unused", "kill_mode", "kill_type", "dynamic_missing", "exec_order", "success_exit", "success_signal"} {
 		t.Run(mode, func(t *testing.T) {
 			g, f, r, sha := gatewayFixture(t)
 			f.mu.Lock()
@@ -983,6 +987,115 @@ func TestGatewaySDKRetainsSecondSnapshotConflict(t *testing.T) {
 			}
 			if mode == "second_job" && fact.Job != 99 || mode == "second_reactivation" && fact.Active != "active" {
 				t.Fatal("old snapshot replaced current conflict", fact)
+			}
+		})
+	}
+}
+
+func TestGatewayLiveToReapingTransitions(t *testing.T) {
+	for _, mode := range []string{"deleted", "exe_missing", "exe_missing_live", "exe_missing_starttime", "uid", "gid", "starttime", "malformed_stat", "wrong_group", "image", "pid_directory", "cgroup_object", "still_live", "first_observation", "late_deleted", "late_uid", "late_starttime"} {
+		t.Run(mode, func(t *testing.T) {
+			g, f, _, _ := gatewayFixture(t)
+			b, err := g.connect(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer b.close()
+			before, err := b.snapshot(context.Background(), nil)
+			if err != nil || !gatewayInitial(before) {
+				t.Fatal("original identity", err)
+			}
+			h := f.host
+			dir := filepath.Join(h.proc, "9001")
+			entered := false
+			transition := func() {
+				if entered {
+					t.Fatal("fixture boundary entered twice")
+				}
+				entered = true
+				change := strings.TrimPrefix(mode, "late_")
+				state, start, uid, gid := "Z", "1234", uint32(24567), uint32(24568)
+				if change == "uid" {
+					uid++
+				}
+				if change == "gid" {
+					gid++
+				}
+				if change == "starttime" || change == "exe_missing_starttime" {
+					start = "1235"
+				}
+				if change == "still_live" || change == "exe_missing_live" {
+					state = "S"
+				}
+				gatewayProc(t, h, 9001, state, start, gatewayUnit, uid, gid, h.nginx)
+				if !strings.HasPrefix(change, "exe_missing") && change != "image" {
+					testWrite(t, filepath.Join(dir, "cgroup"), []byte("0::"+gatewayGroup+" (deleted)\n"), 0444)
+				}
+				switch change {
+				case "exe_missing", "exe_missing_live", "exe_missing_starttime":
+					if err := os.Remove(filepath.Join(dir, "exe")); err != nil {
+						t.Fatal(err)
+					}
+				case "image":
+					if err := os.Remove(filepath.Join(dir, "exe")); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink(h.controllerExe, filepath.Join(dir, "exe")); err != nil {
+						t.Fatal(err)
+					}
+				case "malformed_stat":
+					testWrite(t, filepath.Join(dir, "stat"), []byte("9001 (bad) Z 0\n"), 0444)
+				case "wrong_group":
+					testWrite(t, filepath.Join(dir, "cgroup"), []byte("0::/system.slice/other.service (deleted)\n"), 0444)
+				case "pid_directory":
+					if err := os.Rename(dir, dir+"-retained"); err != nil {
+						t.Fatal(err)
+					}
+					gatewayProc(t, h, 9001, "Z", "1235", gatewayUnit, uid, gid, h.nginx)
+				case "cgroup_object":
+					group := filepath.Join(h.cgroup, gatewayGroup)
+					if err := os.Rename(group, group+"-retained"); err != nil {
+						t.Fatal(err)
+					}
+					testWrite(t, filepath.Join(group, "cgroup.events"), []byte("populated 0\n"), 0600)
+					_, ino, _, err := serviceGroup(h.cgroup, gatewayGroup, false)
+					if err != nil || ino == before.GroupInode {
+						t.Fatal("cgroup was not replaced")
+					}
+				}
+			}
+			if strings.HasPrefix(mode, "late_") {
+				h.beforeFinalRead = transition
+			} else {
+				h.afterStat = transition
+			}
+			current := before
+			var original *gatewayFacts = &before
+			if mode == "first_observation" {
+				original = nil
+			}
+			err = h.enrich(&current, original)
+			if !entered {
+				t.Fatal("live-to-reaping boundary not reached")
+			}
+			if mode == "deleted" || mode == "exe_missing" || mode == "late_deleted" {
+				if !errors.Is(err, errPauseBusy) {
+					t.Fatalf("original transition should wait: %v", err)
+				}
+				h.afterStat = nil
+				h.beforeFinalRead = nil
+				if err := os.RemoveAll(dir); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(h.cgroup, gatewayGroup, "cgroup.events"), []byte("populated 0\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				current.Main, current.Control = serviceProcess{}, serviceProcess{}
+				if err := h.drained(context.Background(), before, current); err != nil {
+					t.Fatal("original reap did not complete", err)
+				}
+			} else if !errors.Is(err, errRefused) {
+				t.Fatalf("known conflict was hidden: %v", err)
 			}
 		})
 	}
