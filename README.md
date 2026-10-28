@@ -18,8 +18,30 @@
 
 消费仓库的产品源码仍由各仓库维护。实际部署配置、凭据和运行原件不进入本仓库。runner 代码合并与生产切换分别验收。
 
-## 文档检查
+## 格式与工具检查
 
-根目录仅保留 Prettier 3.9.9。使用 Bun 1.4.2 执行 `bun install --frozen-lockfile --ignore-scripts`，再对明确文件运行 `bun run format:check README.md AGENTS.md ci-architecture.md`。格式检查不运行 runner、创建 VM 或发布平台状态。
+本地与 [原生 PR 工作流](.github/workflows/format.yml)执行相同入口。当前验收环境为 Linux。准备 `package.json` 声明的 Node 26.8.1、Bun 1.4.2，以及 `runner/go.mod` 声明的 Go 1.27.3。使用官方工具链安装，并核对下载的校验和；Go 准备方式见 [runner 说明](runner/README.md#构建与检查)。随后在仓库根目录运行：
+
+```sh
+bun install --frozen-lockfile --ignore-scripts
+bun run format:check
+bun run typecheck
+bun run test:format
+```
+
+`format:check` 默认检查 Git 已跟踪文件和未忽略的新文件，排除工作树已删除的文件。忽略的依赖、缓存和构建产物不进入默认范围；强制跟踪的文件仍会检查。支持 `.ts`、`.tsx`、`.js`、`.jsx`、`.mjs`、`.cjs`、`.json`、`.md`、`.yml`、`.yaml` 和 `.go`，其余文件跳过。Prettier 使用根目录 `.prettierrc.json`，Go 使用真实 gofmt；配置与依赖可随普通 PR 修改。工具不查找父目录配置或 EditorConfig，也不使用 `.prettierignore` 改变 Git 源码范围。
+
+传入文件时只处理这些仓库相对路径。路径按字面解释，不展开 glob；带空格或方括号时给 shell 参数加引号。例如：
+
+```sh
+bun run format:check README.md scripts/format.ts
+bun run format README.md
+```
+
+只选择 Prettier 文件时不要求 Go。包含 Go 文件或运行完整回归时，工具从 `PATH` 查找 `go` 与 `gofmt`，并核对 gofmt 的构建版本。另一个已准备的工具目录可通过 `DESIGNS_GO_BIN=/absolute/path/to/bin` 指定。`typecheck` 仅覆盖 `scripts/`；`test:format` 覆盖格式工具的读写、文件选择、失败与并发保护，包含真实 gofmt。
+
+检查只读，格式差异退出 1；路径、工具、解析或读写错误退出 2。`bun run format` 显式写回全部支持文件，也接受同样的文件参数。修复后查看 `git diff`，再运行检查。写回逐文件进行，后续文件失败时先前修复可能已保留；先核对日志和 diff，再决定后续修复。链接、无效 UTF-8、语法错误或检测到的并发修改会阻止对应文件写回。写回并非事务，也不提供文件锁；停止并发编辑后重新检查，不把失败当作已回滚。
+
+工作流在 PR 和 `main` push 上运行格式、类型与工具回归，仅持源码读取权限。当前使用 GitHub hosted `ubuntu-latest`；真实调度结果与 required checks 由平台交付另行核验。格式通过不代表完整 Go、文档结构或安全检查通过。依赖准备失败时保留原错误，核对工具版本、网络和锁文件；用相同锁重新准备后再检查，不通过删除检查或修改锁文件掩盖失败。工具或配置修复使用普通 PR，并保持 manifest 与锁文件一致；回退同样恢复配套源码、配置和锁。
 
 旧执行器与配方的准确版本保留在 Git 历史。原操作和未知结果的恢复继续使用原身份与原材料，不通过恢复旧门禁或兼容桥接实现。

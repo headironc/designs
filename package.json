@@ -7,10 +7,14 @@
     "node": "26.8.1"
   },
   "scripts": {
-    "format:check": "prettier --check",
-    "format": "prettier --write"
+    "format:check": "node scripts/format.ts --check",
+    "format": "node scripts/format.ts --write",
+    "typecheck": "tsc --noEmit",
+    "test:format": "node --test scripts/format.test.ts"
   },
   "devDependencies": {
-    "prettier": "3.9.9"
+    "@types/node": "26.6.4",
+    "prettier": "3.9.9",
+    "typescript": "7.0.2"
   }
 }
