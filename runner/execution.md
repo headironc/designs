@@ -76,4 +76,4 @@ root 卷由实际存储 API 读取，保存名称、独立的 `volatile.uuid`、
 
 离线检查使用实际 go-github v84.0.0、GARM v0.2.1 和固定 LXD SDK。私有 HTTP/Unix socket 夹具覆盖准确整数、错 repo/run/attempt/job/agent、GARM 及 VM/卷错绑定、缺失/null、响应上限、重定向和禁止写入。文件与进程检查覆盖永久锁、替换、链接、PID 复用或退出、boot/cgroup 变化、并发、取消、部分回执和原结果回读。真实子进程测试只启动测试成品，不运行 runner 或真实 VM。
 
-构建和受影响 Go 检查沿用 [README](README.md#构建与检查)。测试不访问真实 GitHub/GARM/LXD，不连接宿主 system bus，不安装服务或部署成品。后续原执行闭合诊断再消费这份原身份；records-only 维护窗口、正常服务恢复、尚未分配执行和完整生命周期仍需独立交付。
+构建和受影响 Go 检查沿用 [README](README.md#构建与检查)。测试不访问真实 GitHub/GARM/LXD，不连接宿主 system bus，不安装服务或部署成品。[原执行闭合诊断](closure.md)通过共享的完整 loader 消费这份原身份。诊断使用可信输入校验原 producer 摘要，另计算并报告当前诊断程序摘要；records-only 维护窗口、正常服务恢复、尚未分配执行和完整生命周期仍需独立交付。

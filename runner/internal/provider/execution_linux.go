@@ -29,25 +29,39 @@ type ExecutionBinding struct {
 	ConfigSHA   string `json:"config_sha256"`
 }
 
+// Valid checks identity reconstruction, without granting admission or mutation.
+func (b ExecutionBinding) Valid() bool {
+	p := guardPolicy{b.Controller, b.Repository, b.ScaleSet, b.Pool, b.Image}
+	return p.valid() && instanceName.MatchString(b.Name) && uuid.MatchString(b.UUID) && b.AgentID > 0 && digest.MatchString(b.StateSHA) && digest.MatchString(b.PolicySHA) && digest.MatchString(b.ProviderSHA) && digest.MatchString(b.ConfigSHA)
+}
+
 // InspectExecution holds the permanent provider lock for a root administrative
 // observer. The observer prepares a local publication callback; the guard runs
 // its final checks before invoking that callback under the same permanent lock.
 // The callback must call recheck before publishing its completion seal.
 // Normal provider entrypoints retain their separate service-identity requirement.
 func InspectExecution(ctx context.Context, observe func(ExecutionBinding, func() error) (func() error, error)) error {
+	s, err := administrativePaths()
+	if err != nil {
+		return err
+	}
+	return s.inspectExecution(ctx, observe)
+}
+
+func administrativePaths() (startup, error) {
 	if os.Getuid() != 0 || os.Geteuid() != 0 {
-		return errRefused
+		return startup{}, errRefused
 	}
 	identity, err := user.Lookup("nucleiron")
 	if err != nil {
-		return errRefused
+		return startup{}, errRefused
 	}
 	uid, err := strconv.ParseUint(identity.Uid, 10, 32)
 	if err != nil || uid == 0 {
-		return errRefused
+		return startup{}, errRefused
 	}
 	s := startup{policy: "/etc/nucleus-halo/provider-policy.json", native: "/opt/nucleus-halo/bin/garm-provider-lxd", config: "/etc/nucleus-halo/garm-provider-lxd.toml", state: "/var/lib/nucleiron/provider-guard", maintenance: "/run/nucleiron-records-only", serviceUID: uint32(uid)}
-	return s.inspectExecution(ctx, observe)
+	return s, nil
 }
 
 func (s startup) inspectExecution(ctx context.Context, observe func(ExecutionBinding, func() error) (func() error, error)) error {

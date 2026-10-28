@@ -259,6 +259,10 @@ type completion struct {
 }
 
 func (p protectedFiles) original(parent string, r request, requestRaw []byte, producerSHA string) (bool, error) {
+	return p.originalRecord(parent, r, requestRaw, producerSHA, nil)
+}
+
+func (p protectedFiles) originalRecord(parent string, r request, requestRaw []byte, producerSHA string, result *receipt) (bool, error) {
 	path := filepath.Join(parent, r.Operation)
 	if p.parents(filepath.Join(parent, "unused")) != nil {
 		return false, errRefused
@@ -300,20 +304,7 @@ func (p protectedFiles) original(parent string, r request, requestRaw []byte, pr
 	}
 	var complete completion
 	var record receipt
-	if strictObject(seal, &complete) != nil || complete.Version != 1 || complete.ExecutionSHA != fmt.Sprintf("%x", sha256.Sum256(data)) || strictObject(data, &record) != nil || record.Version != 1 || record.ProducerSHA != producerSHA || record.RequestSHA != fmt.Sprintf("%x", sha256.Sum256(requestRaw)) || record.Expected != r {
-		return false, errRefused
-	}
-	b := record.Observed.Guard
-	vm := record.Observed.VM
-	if b.Controller != r.Controller || b.Repository != r.GARMRepository || b.Pool != b.ScaleSet+"-"+b.Repository || !uuidPattern.MatchString(b.UUID) || b.AgentID <= 0 || record.Observed.RunnerID != b.AgentID || record.Observed.RunnerName != b.Name || record.Observed.GitHubScaleSetID <= 0 || vm.PID != record.Observed.Host.PID || !record.Observed.Host.valid() || !uuidPattern.MatchString(vm.VolumeUUID) || vm.VolumeUUID == b.UUID || vm.VolumeName != b.Name || vm.VolumeType != "virtual-machine" || vm.VolumePool != "halo-ci" || vm.VolumeProject != "halo-ci" || vm.VolumeContent != "block" {
-		return false, errRefused
-	}
-	for _, s := range []string{b.StateSHA, b.PolicySHA, b.ProviderSHA, b.ConfigSHA, b.Image} {
-		if !digestPattern.MatchString(s) {
-			return false, errRefused
-		}
-	}
-	if _, err := time.Parse(time.RFC3339Nano, record.CapturedAt); err != nil {
+	if strictObject(seal, &complete) != nil || complete.Version != 1 || complete.ExecutionSHA != fmt.Sprintf("%x", sha256.Sum256(data)) || strictObject(data, &record) != nil || !validRecord(record, r, requestRaw, producerSHA) {
 		return false, errRefused
 	}
 	if !samePath(dir, path) {
@@ -332,7 +323,22 @@ func (p protectedFiles) original(parent string, r request, requestRaw []byte, pr
 			return false, errRefused
 		}
 	}
+	if result != nil {
+		*result = record
+	}
 	return true, nil
+}
+
+func validRecord(record receipt, r request, raw []byte, producer string) bool {
+	if record.Version != 1 || !digestPattern.MatchString(producer) || record.ProducerSHA != producer || record.Expected != r || record.RequestSHA != fmt.Sprintf("%x", sha256.Sum256(raw)) {
+		return false
+	}
+	b, vm, host := record.Observed.Guard, record.Observed.VM, record.Observed.Host
+	if !b.Valid() || b.Controller != r.Controller || b.Repository != r.GARMRepository || record.Observed.RunnerID != b.AgentID || record.Observed.RunnerName != b.Name || record.Observed.GitHubScaleSetID <= 0 || vm.PID != host.PID || !host.valid() || !vm.valid(b.Name, b.UUID) {
+		return false
+	}
+	_, err := time.Parse(time.RFC3339Nano, record.CapturedAt)
+	return err == nil
 }
 
 func runningDigest() (string, error) {

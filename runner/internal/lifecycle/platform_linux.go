@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	garm "github.com/cloudbase/garm/client"
@@ -56,8 +57,104 @@ func (t readTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil || len(raw) > 2*1024*1024 || unambiguous(raw) != nil {
 		return nil, errRefused
 	}
+	// These SDK fields have non-pointer representations. Preserve their wire
+	// absence rules before decoding: GitHub total_count is required, whereas
+	// GARM v0.2.1 ScaleSet.Enabled uses omitempty for disabled ScaleSets.
+	if t.host == "api.github.com" && strings.HasSuffix(req.URL.Path, "/actions/runners") {
+		var wire struct {
+			Total *int `json:"total_count"`
+		}
+		if json.Unmarshal(raw, &wire) != nil || wire.Total == nil {
+			return nil, errRefused
+		}
+	}
+	if t.host == "127.0.0.1:9997" && !garmIdentityPresent(req.URL.Path, raw) {
+		return nil, errRefused
+	}
+	if t.host == "127.0.0.1:9997" && strings.HasPrefix(req.URL.Path, "/api/v1/scalesets/") && strings.Count(strings.TrimPrefix(req.URL.Path, "/api/v1/scalesets/"), "/") == 0 {
+		var wire map[string]json.RawMessage
+		if json.Unmarshal(raw, &wire) != nil {
+			return nil, errRefused
+		}
+		for key, value := range wire {
+			if foldJSONName(key) == foldJSONName("enabled") && string(value) != "true" && string(value) != "false" {
+				return nil, errRefused
+			}
+		}
+	}
 	response.Body = io.NopCloser(bytes.NewReader(raw))
 	return response, nil
+}
+
+// GARM's generated response payloads and identity fields are value types.
+// Restore required wire presence before SDK decoding erases absent/null into
+// zero values. The SDK still decodes values; the consumer checks exact binding.
+type endpointPresence struct {
+	Type *string `json:"endpoint_type"`
+	Base *string `json:"base_url"`
+	API  *string `json:"api_base_url"`
+}
+
+func (e *endpointPresence) complete() bool {
+	return e != nil && e.Type != nil && e.Base != nil && e.API != nil
+}
+
+func garmIdentityPresent(path string, raw []byte) bool {
+	switch {
+	case path == "/api/v1/instances" || strings.HasPrefix(path, "/api/v1/scalesets/") && strings.HasSuffix(path, "/instances"):
+		var rows []struct {
+			ID         *string         `json:"id"`
+			Name       *string         `json:"name"`
+			Provider   *string         `json:"provider_name"`
+			ProviderID json.RawMessage `json:"provider_id"`
+			AgentID    json.RawMessage `json:"agent_id"`
+			ScaleSet   json.RawMessage `json:"scale_set_id"`
+			Pool       json.RawMessage `json:"pool_id"`
+			Status     json.RawMessage `json:"status"`
+			Runner     json.RawMessage `json:"runner_status"`
+		}
+		if json.Unmarshal(raw, &rows) != nil || rows == nil {
+			return false
+		}
+		for _, row := range rows {
+			if row.ID == nil || row.Name == nil || row.Provider == nil {
+				return false
+			}
+			// v0.2.1 omits zero assignment fields for pending instances and
+			// the unused ScaleSet/pool branch. Explicit null is not produced.
+			for _, value := range []json.RawMessage{row.ProviderID, row.AgentID, row.ScaleSet, row.Pool, row.Status, row.Runner} {
+				if string(value) == "null" {
+					return false
+				}
+			}
+		}
+		return true
+	case path == "/api/v1/controller-info":
+		var v *struct {
+			ID *string `json:"controller_id"`
+		}
+		return json.Unmarshal(raw, &v) == nil && v != nil && v.ID != nil
+	case strings.HasPrefix(path, "/api/v1/repositories/") && !strings.Contains(strings.TrimPrefix(path, "/api/v1/repositories/"), "/"):
+		var v *struct {
+			ID       *string           `json:"id"`
+			Owner    *string           `json:"owner"`
+			Name     *string           `json:"name"`
+			Endpoint *endpointPresence `json:"endpoint"`
+		}
+		return json.Unmarshal(raw, &v) == nil && v != nil && v.ID != nil && v.Owner != nil && v.Name != nil && v.Endpoint.complete()
+	case strings.HasPrefix(path, "/api/v1/scalesets/") && !strings.Contains(strings.TrimPrefix(path, "/api/v1/scalesets/"), "/"):
+		var v *struct {
+			ID         *uint32           `json:"id"`
+			GitHubID   *int              `json:"scale_set_id"`
+			Repository *string           `json:"repo_id"`
+			Name       *string           `json:"name"`
+			Provider   *string           `json:"provider_name"`
+			Endpoint   *endpointPresence `json:"endpoint"`
+		}
+		return json.Unmarshal(raw, &v) == nil && v != nil && v.ID != nil && v.GitHubID != nil && v.Repository != nil && v.Name != nil && v.Provider != nil && v.Endpoint.complete()
+	default:
+		return true
+	}
 }
 
 type platforms struct {

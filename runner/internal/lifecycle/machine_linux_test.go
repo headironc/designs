@@ -30,6 +30,10 @@ func machineBodies() map[string]string {
 }
 
 func machineFixture(t *testing.T, bodies map[string]string) string {
+	return machineResponder(t, func(r *http.Request) (string, bool) { body, ok := bodies[r.URL.Path]; return body, ok })
+}
+
+func machineResponder(t *testing.T, respond func(*http.Request) (string, bool)) string {
 	t.Helper()
 	// AF_UNIX includes the entire path in its 108-byte address. Keep this
 	// fixture independent of both TMPDIR and testing's full subtest name.
@@ -53,10 +57,11 @@ func machineFixture(t *testing.T, bodies map[string]string) string {
 			http.Error(w, "write", 500)
 			return
 		}
-		if r.URL.Path != "/1.0" && r.URL.Query().Get("project") != "halo-ci" {
+		allProjectsInventory := (r.URL.Path == "/1.0/instances" || r.URL.Path == "/1.0/storage-pools/halo-ci/volumes") && r.URL.Query().Get("all-projects") == "true"
+		if r.URL.Path != "/1.0" && r.URL.Query().Get("project") != "halo-ci" && !allProjectsInventory {
 			t.Errorf("missing project binding on %s", r.URL)
 		}
-		body, ok := bodies[r.URL.Path]
+		body, ok := respond(r)
 		if !ok {
 			t.Errorf("unexpected LXD path %s", r.URL.Path)
 			http.NotFound(w, r)

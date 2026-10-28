@@ -1,6 +1,6 @@
 # Runner Go 实现
 
-已交付专用防火墙重载、[guest bootstrap](bootstrap.md)、[provider 异常停接](watchdog.md)、[Go guard 正常启动准入](startup.md)、[guard watchdog 检查与状态持久化](guard-watchdog.md)、[单次 VM 创建](create.md)、[VM 删除与容量释放](delete.md)和 [provider 正常只读协议](read.md)。异常停接已接入 GARM client 与 go-systemd，包含原停止 job 恢复。本片新增 [原执行身份采集](execution.md)，为正在运行的准确 job 独占保存可追溯回执。已采用的 Go 包及后续接入边界见 [架构选型](architecture.md#已采用的-go-包)。以下描述当前已合入的 firewall；目标 nftables 包实现尚未接入。
+已交付专用防火墙重载、[guest bootstrap](bootstrap.md)、[provider 异常停接](watchdog.md)、[Go guard 正常启动准入](startup.md)、[guard watchdog 检查与状态持久化](guard-watchdog.md)、[单次 VM 创建](create.md)、[VM 删除与容量释放](delete.md)、[provider 正常只读协议](read.md)和 [原执行身份采集](execution.md)。异常停接已接入 GARM client 与 go-systemd，包含原停止 job 恢复。本片新增 [原执行闭合诊断](closure.md)，分别报告原 job 结论、资源事实及不可补造的证据缺口，不签发清理许可。已采用的 Go 包及后续接入边界见 [架构选型](architecture.md#已采用的-go-包)。以下描述当前已合入的 firewall；目标 nftables 包实现尚未接入。
 
 `runner-firewall` 供 `nucleiron-firewall.service` 的启动与重载使用。它用 `/usr/sbin/nft` 列出现有表，读取 `/etc/nucleiron-gateway/isolated-network.nft`，检查后应用同一份规则字节。
 
@@ -8,7 +8,7 @@
 
 ## 构建与检查
 
-当前自有 module 使用标准库、x/sys、GARM client、LXD client、go-github 与 go-systemd；版本由 `go.mod` / `go.sum` 固定，其余目标依赖随对应实施片接入。Linux amd64 构建固定使用 [Go 1.27.3](https://go.dev/dl/)，即本片核定时的最新稳定版。官方工具链归档 SHA256 为 `65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40`。先下载并验证工具链，再准备固定依赖。provider 与 watchdog 的私有 D-Bus 测试还需 `dbus-daemon`，不连接宿主 system bus。
+当前自有 module 使用标准库、x/sys、GARM client、LXD client、go-github、go-systemd、modernc SQLite 和 BurntSushi TOML；版本由 `go.mod` / `go.sum` 固定，其余目标依赖随对应实施片接入。Linux amd64 构建固定使用 [Go 1.27.3](https://go.dev/dl/)，即本片核定时的最新稳定版。官方工具链归档 SHA256 为 `65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40`。先下载并验证工具链，再准备固定依赖。provider、watchdog 和 lifecycle 的私有 D-Bus 测试还需 `dbus-daemon`，不连接宿主 system bus。闭合诊断的实际降权用例另需 [一次性私有容器](closure.md#验证与后续边界)，普通测试的 skip 不证明该项通过。
 
 首次在本目录联网准备缓存，使用 Go 官方模块代理与校验数据库：
 
