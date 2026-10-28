@@ -71,6 +71,9 @@ func (t readTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.host == "127.0.0.1:9997" && !garmIdentityPresent(req.URL.Path, raw) {
 		return nil, errRefused
 	}
+	if t.host == "127.0.0.1:9997" && !admissionWire(req.URL.Path, raw) {
+		return nil, errRefused
+	}
 	if t.host == "127.0.0.1:9997" && strings.HasPrefix(req.URL.Path, "/api/v1/scalesets/") && strings.Count(strings.TrimPrefix(req.URL.Path, "/api/v1/scalesets/"), "/") == 0 {
 		var wire map[string]json.RawMessage
 		if json.Unmarshal(raw, &wire) != nil {

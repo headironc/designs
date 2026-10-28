@@ -263,6 +263,10 @@ func (p protectedFiles) original(parent string, r request, requestRaw []byte, pr
 }
 
 func (p protectedFiles) originalRecord(parent string, r request, requestRaw []byte, producerSHA string, result *receipt) (bool, error) {
+	return p.originalExecution(parent, r, requestRaw, producerSHA, result, nil)
+}
+
+func (p protectedFiles) originalExecution(parent string, r request, requestRaw []byte, producerSHA string, result *receipt, executionSHA *string) (bool, error) {
 	path := filepath.Join(parent, r.Operation)
 	if p.parents(filepath.Join(parent, "unused")) != nil {
 		return false, errRefused
@@ -325,6 +329,9 @@ func (p protectedFiles) originalRecord(parent string, r request, requestRaw []by
 	}
 	if result != nil {
 		*result = record
+	}
+	if executionSHA != nil {
+		*executionSHA = complete.ExecutionSHA
 	}
 	return true, nil
 }

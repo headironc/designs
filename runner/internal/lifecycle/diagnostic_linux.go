@@ -69,6 +69,7 @@ type diagnosticReport struct {
 	Database           databaseObservation  `json:"database"`
 	ProvenanceGaps     []string             `json:"provenance_gaps"`
 	Closure            string               `json:"closure"`
+	WatchdogPause      pauseOutcome         `json:"watchdog_pause"`
 }
 
 type diagnostician struct {
@@ -80,6 +81,7 @@ type diagnostician struct {
 	guard        func(context.Context) (provider.GuardObservation, error)
 	services     func(context.Context) []serviceObservation
 	database     func(context.Context, receipt) databaseObservation
+	pause        func(context.Context) pauseOutcome
 }
 
 func (d diagnostician) observe(ctx context.Context, r receipt, producer string) diagnosticReport {
@@ -107,6 +109,10 @@ func (d diagnostician) observe(ctx context.Context, r receipt, producer string) 
 	})
 	observe(func(c context.Context) { out.Services = d.services(c) })
 	observe(func(c context.Context) { out.Database = d.database(c, r) })
+	out.WatchdogPause = pauseOutcome{State: "unknown", Code: "pause_producer_untrusted"}
+	if d.pause != nil {
+		observe(func(c context.Context) { out.WatchdogPause = d.pause(c) })
+	}
 	out.Database.RuntimeConnection = "runtime_database_connection_unknown"
 	if out.Database.Configuration == "current_file_fixed_database_verified" {
 		var after []serviceObservation
@@ -137,7 +143,11 @@ func runDiagnostic(ctx context.Context, args []string, output, diagnostic io.Wri
 	captureSHA := f.String("capture-sha256", "", "trusted original producer digest")
 	ghPath := f.String("github-token-file", "", "existing credential")
 	gaPath := f.String("garm-token-file", "", "existing credential")
+	pauseSHA := f.String("pause-sha256", "", "trusted original pause producer")
 	if f.Parse(args) != nil || f.NArg() != 0 || *requestPath == "" || *operations == "" || !digestPattern.MatchString(*captureSHA) || *ghPath == "" || *gaPath == "" {
+		return fail()
+	}
+	if *pauseSHA != "" && !digestPattern.MatchString(*pauseSHA) {
 		return fail()
 	}
 	stage = "identity"
@@ -160,7 +170,8 @@ func runDiagnostic(ctx context.Context, args []string, output, diagnostic io.Wri
 	}
 	stage = "original"
 	var original receipt
-	ok, err := p.originalRecord(*operations, r, raw, *captureSHA, &original)
+	var executionSHA string
+	ok, err := p.originalExecution(*operations, r, raw, *captureSHA, &original, &executionSHA)
 	if err != nil || !ok {
 		return fail()
 	}
@@ -187,6 +198,13 @@ func runDiagnostic(ctx context.Context, args []string, output, diagnostic io.Wri
 	d := diagnostician{job: platform.diagnoseJob, registration: platform.diagnoseRegistration, garm: platform.diagnoseGARM, machine: func(c context.Context, r receipt) machineObservation {
 		return diagnoseMachine(c, "/var/snap/lxd/common/lxd/unix.socket", r)
 	}, host: (hostFiles{proc: "/proc", cgroup: "/sys/fs/cgroup", realFS: true}).diagnose, guard: provider.ObserveGuard, services: observeServices, database: observeDatabase}
+	if *pauseSHA != "" {
+		h := pauseHost{proc: "/proc", cgroup: "/sys/fs/cgroup", realFS: true}
+		observer := pauser{files: p, parent: pauseParent, producer: *pauseSHA, boot: h.boot, connect: func(c context.Context) (pauseConnection, error) {
+			return connectPause(c, "/run/dbus/system_bus_socket", h)
+		}}
+		d.pause = func(c context.Context) pauseOutcome { return observer.observe(c, original, executionSHA) }
+	}
 	report := d.observe(ctx, original, producer)
 	stage = "report"
 	data, err := json.Marshal(report)
