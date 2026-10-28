@@ -9,7 +9,7 @@ require (
 	github.com/cloudbase/garm-provider-common v0.1.9
 	github.com/coreos/go-systemd/v22 v22.7.0
 	github.com/go-openapi/runtime v0.29.5
-	github.com/godbus/dbus/v5 v5.1.0
+	github.com/godbus/dbus/v5 v5.2.4
 	github.com/google/go-github/v84 v84.0.0
 	golang.org/x/sys v0.49.0
 	modernc.org/sqlite v1.61.0
