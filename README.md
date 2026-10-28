@@ -20,6 +20,8 @@
 
 ## 格式与工具检查
 
+[关闭后锁定](.github/workflows/lock-pr.yml)在 PR 关闭或合并后锁定对话，owner 和合作者仍可评论。它只消费默认分支的 workflow，不 checkout 或执行候选代码；使用本次 `GITHUB_TOKEN` 的 `pull-requests: write`，不读取仓库 secret 或 PAT。执行前回读原 PR，已重开或已锁定就跳过。写入报错也回读，不重发，未确认锁定则任务失败。同一 PR 的事件串行处理。事件处理有延迟，PR 在读取与锁定之间被重开仍有竞争窗口。该入口不解锁重开的 PR，不关闭或归档 PR，也不限制 open PR 的外部评论。历史批量锁定单独执行，不由此工作流扫描补做。
+
 本地与 [原生 PR 工作流](.github/workflows/format.yml)执行相同入口。格式工具要求 Linux，并可访问 `/proc/self/fd`。缺少该条件时直接失败；其他平台未支持。仓库根路径的每级目录和所选文件都拒绝符号链接，请使用真实目录路径。准备 `package.json` 声明的 Node 26.8.1、Bun 1.4.2，以及 `runner/go.mod` 声明的 Go 1.27.3。使用官方工具链安装，并核对下载的校验和；Go 准备方式见 [runner 说明](runner/README.md#构建与检查)。随后在仓库根目录运行：
 
 ```sh
