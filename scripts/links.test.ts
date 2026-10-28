@@ -10,6 +10,7 @@ import {
   readdirSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -331,8 +332,24 @@ test("live edits, file replacement, source-set changes and root replacement inva
     // checkLinks has copied all source before awaiting the real binary's version.
     if (mutation === "edit") put(root, "README.md", "# Changed\n");
     if (mutation === "replace") {
-      rmSync(path.join(root, "README.md"));
-      put(root, "README.md", "# Safe\n");
+      const file = path.join(root, "README.md");
+      const original = statSync(file, { bigint: true });
+      // Keep the original inode live until a distinct replacement is ready.
+      put(root, "replacement.tmp", "# Safe\n");
+      const replacement = path.join(root, "replacement.tmp");
+      const created = statSync(replacement, { bigint: true });
+      assert.notDeepEqual(
+        [created.dev, created.ino],
+        [original.dev, original.ino],
+        "replace: fixture must have a distinct file identity",
+      );
+      renameSync(replacement, file);
+      const current = statSync(file, { bigint: true });
+      assert.deepEqual(
+        [current.dev, current.ino],
+        [created.dev, created.ino],
+        "replace: the prepared file must replace the source path",
+      );
     }
     if (mutation === "add") put(root, "new.png", "new source target");
     if (mutation === "delete") rmSync(path.join(root, "README.md"));
@@ -344,7 +361,11 @@ test("live edits, file replacement, source-set changes and root replacement inva
       execFileSync("git", ["init", "--quiet", root]);
       put(root, "README.md", "# Safe\n");
     }
-    await assert.rejects(pending, /Source.*changed/);
+    await assert.rejects(
+      pending,
+      /Source.*changed/,
+      `${mutation}: source mutation must invalidate the snapshot`,
+    );
   }
 });
 
