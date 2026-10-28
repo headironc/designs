@@ -424,7 +424,7 @@ export async function checkVulnerabilities(
           graph,
         },
       );
-      blocked = assessment.pending.length > 0;
+      blocked = assessment.pending.length > 0 || assessment.reasons.length > 0;
       save("assessment.json", {
         nativeJSONExitCode: 0,
         nativeTextExitCode,
@@ -436,7 +436,7 @@ export async function checkVulnerabilities(
       const count = new Set(report.reachable.map((finding) => finding.osv))
         .size;
       summary = `Native scan reported ${count} reachable advisories (native text exit ${nativeTextExitCode}); ${assessment.disposed.length} source-not-affected; ${assessment.pending.length} unhandled reachable advisories`;
-      if (assessment.reasons.length && findings)
+      if (assessment.reasons.length)
         summary += `; disposition invalid: ${assessment.reasons.join("; ")}`;
     }
   } catch (error) {

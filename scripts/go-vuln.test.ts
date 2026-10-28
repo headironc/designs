@@ -146,7 +146,20 @@ test("real scanner detects selected test/tag symbols, keeps reports and leaves l
     goBin,
   });
   assert.equal(clean.findings, false);
-  assert.equal(clean.blocked, false);
+  assert.equal(
+    clean.blocked,
+    true,
+    "the Runner disposition does not bind this clean fixture",
+  );
+  assert.match(clean.summary, /disposition invalid/);
+  const cleanAssessment = JSON.parse(
+    readFileSync(path.join(clean.report, "assessment.json"), "utf8"),
+  );
+  assert.equal(cleanAssessment.nativeJSONExitCode, 0);
+  assert.equal(cleanAssessment.nativeTextExitCode, 0);
+  assert.deepEqual(cleanAssessment.pending, []);
+  assert.ok(cleanAssessment.reasons.length);
+  assert.equal(cleanAssessment.blocked, true);
   const hit = await checkVulnerabilities({ ...f, goBin });
   assert.equal(hit.findings, true);
   assert.equal(hit.blocked, true);
@@ -362,16 +375,23 @@ test("source, locks, graph, scope and OSV changes invalidate the reviewed set", 
     },
   ];
   for (const change of changes) {
-    const f = dispositionFixture();
-    change(f);
-    const result = evaluateLXD(
-      parseScan(f.messages, vulnTool),
-      f.record,
-      f.actual,
-    );
-    assert.deepEqual(result.disposed, []);
-    assert.deepEqual(result.pending, lxdIDs);
-    assert.ok(result.reasons.length);
+    for (const reachable of [true, false]) {
+      const f = dispositionFixture();
+      change(f);
+      if (!reachable)
+        f.messages = f.messages.filter((message) => !message.finding);
+      const result = evaluateLXD(
+        parseScan(f.messages, vulnTool),
+        f.record,
+        f.actual,
+      );
+      assert.deepEqual(result.disposed, []);
+      assert.deepEqual(result.pending, reachable ? lxdIDs : []);
+      assert.ok(
+        result.reasons.length,
+        "invalid binding remains a blocker even without reachable findings",
+      );
+    }
   }
   for (const field of ["module", "version", "package"]) {
     const f = dispositionFixture();
@@ -383,6 +403,20 @@ test("source, locks, graph, scope and OSV changes invalidate the reviewed set", 
       [lxdIDs.at(-1)],
     );
   }
+});
+
+test("a valid complete binding with no reachable findings has no gate blockers", () => {
+  const f = dispositionFixture();
+  const report = parseScan(
+    f.messages.filter((message) => !message.finding),
+    vulnTool,
+  );
+  assert.equal(verifyNativeStatus(report, 0), false);
+  assert.deepEqual(evaluateLXD(report, f.record, f.actual), {
+    disposed: [],
+    pending: [],
+    reasons: [],
+  });
 });
 
 test("source binding includes added, deleted and changed Go files and locks, but excludes Markdown", () => {
