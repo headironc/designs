@@ -151,7 +151,7 @@ func (p *platforms) diagnoseGARM(ctx context.Context, r receipt) garmObservation
 		seen[item.ID] = item
 		names[item.Name] = true
 		if item.ID == expected.Instance || item.Name == b.Name {
-			if item.ID != expected.Instance || item.Name != b.Name || item.ProviderID != b.Name || item.AgentID != b.AgentID || uint64(item.ScaleSetID) != uint64(expected.ScaleSet) || item.ProviderName != "halo-lxd" {
+			if item.ID != expected.Instance || item.Name != b.Name || item.ProviderName != "halo-lxd" || item.ProviderID != "" && item.ProviderID != b.Name || item.AgentID != 0 && item.AgentID != b.AgentID || item.ScaleSetID != 0 && uint64(item.ScaleSetID) != uint64(expected.ScaleSet) || item.PoolID != "" {
 				return garmObservation{resourceObservation: resource("mismatch", len(all.Payload))}
 			}
 			matched = true
@@ -160,6 +160,9 @@ func (p *platforms) diagnoseGARM(ctx context.Context, r receipt) garmObservation
 				status = string(item.Status)
 			default:
 				return bad("garm_instance_status_invalid")
+			}
+			if item.ProviderID == "" || item.AgentID == 0 || item.ScaleSetID == 0 {
+				return garmObservation{resourceObservation: unknown("garm_instance_binding_unassigned"), TargetStatus: status}
 			}
 		}
 	}

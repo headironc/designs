@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/url"
@@ -25,6 +26,8 @@ type machine struct {
 	VolumeLocation string `json:"volume_location"`
 	VolumeUsedBy   string `json:"volume_used_by"`
 }
+
+var errNetworkUnavailable = errors.New("network observation unavailable")
 
 func (m machine) valid(name, vmUUID string) bool {
 	return m.PID > 0 && m.PID <= 2147483647 && m.VolumeName == name && uuidPattern.MatchString(m.VolumeUUID) && m.VolumeUUID != vmUUID && m.VolumeType == "virtual-machine" && m.VolumePool == "halo-ci" && m.VolumeProject == "halo-ci" && m.VolumeContent == "block" && m.VolumeUsedBy == "/1.0/instances/"+name+"?project=halo-ci"
@@ -49,6 +52,19 @@ func (t *lxdTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil || json.Unmarshal(raw, &body) != nil || len(body.Metadata) == 0 || string(body.Metadata) == "null" {
 		response.Body.Close()
 		return nil, errRefused
+	}
+	if req.URL.Path == "/1.0/networks/nucleiron0" {
+		// Network uses value fields. Missing/null metadata must not become
+		// an observed unmanaged or wrong-type network after SDK decoding.
+		var network *struct {
+			Name    *string `json:"name"`
+			Type    *string `json:"type"`
+			Managed *bool   `json:"managed"`
+			Status  *string `json:"status"`
+		}
+		if json.Unmarshal(body.Metadata, &network) != nil || network == nil || network.Name == nil || network.Type == nil || network.Managed == nil || network.Status == nil {
+			return nil, errRefused
+		}
 	}
 	if req.URL.Path == "/1.0/instances" && strings.HasPrefix(req.URL.Query().Get("recursion"), "2") {
 		var rows []map[string]json.RawMessage
@@ -159,7 +175,10 @@ func machineAttachments(client lxd.InstanceServer, vm api.Instance) error {
 				return errRefused
 			}
 			network, _, err := client.GetNetwork("nucleiron0")
-			if err != nil || network == nil || network.Name != "nucleiron0" || network.Type != "bridge" || !network.Managed || network.Status != api.NetworkStatusCreated {
+			if err != nil || network == nil {
+				return errNetworkUnavailable
+			}
+			if network.Name != "nucleiron0" || network.Type != "bridge" || !network.Managed || network.Status != api.NetworkStatusCreated {
 				return errRefused
 			}
 		case "disk":

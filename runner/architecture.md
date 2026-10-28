@@ -152,7 +152,7 @@ guard 的共享 policy 拥有 `controller_id`、`repository_id`、`scaleset_name
 
 ## 构建、验证与后续切换
 
-新自有程序使用 Go 工具链直接构建、测试。`go.mod` 与[构建说明](README.md)固定当前工具链和依赖版本。当前已接入 `x/sys`、GARM client、provider-common、LXD client、go-github 与 go-systemd，其余依赖按上表接入，新构建入口不依赖 Python。先联网取得并核验固定依赖，再在已准备的缓存中关闭网络下载进行构建。Linux 系统行为在独立 Linux 测试目录验证。
+新自有程序使用 Go 工具链直接构建、测试。`go.mod` 与[构建说明](README.md)固定当前工具链和依赖版本。当前已接入 `x/sys`、GARM client、provider-common、LXD client、go-github、go-systemd、modernc SQLite 和 BurntSushi TOML。其余目标依赖随上表对应的真实消费者接入，新构建入口不依赖 Python。先联网取得并核验固定依赖，再在已准备的缓存中关闭网络下载进行构建。Linux 系统行为在独立 Linux 测试目录验证。
 
 第三方源码归档仍使用已核版本和摘要。自有 Go module 不直接合并两份第三方 vendor 树。需要的库按实际 import 固定版本，并验证与原协议相符。发布包标注源码提交、依赖、目标平台与各成品摘要。构建记录证明来源，不代替运行许可。
 

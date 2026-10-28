@@ -525,6 +525,7 @@ func databaseRows(ctx context.Context, tx *sql.Tx, r receipt) (databaseObservati
 		return out, err
 	}
 	out.Count = len(instances)
+	identityConflict := false
 	for _, item := range instances {
 		id, ok := stringValue(item[0])
 		name, n := stringValue(item[1])
@@ -542,8 +543,7 @@ func databaseRows(ctx context.Context, tx *sql.Tx, r receipt) (databaseObservati
 			continue
 		}
 		if id != r.Expected.Instance || name != r.Observed.RunnerName || provider != name || agent != r.Observed.RunnerID || scale != int64(r.Expected.ScaleSet) || item[5] != nil {
-			out.State = "mismatch"
-			out.Target = "mismatch"
+			identityConflict = true
 		} else if deleted {
 			out.State = "residual"
 			out.Target = "soft_deleted"
@@ -559,6 +559,13 @@ func databaseRows(ctx context.Context, tx *sql.Tx, r receipt) (databaseObservati
 	}
 	if len(instances) > 1 {
 		out.State = "residual"
+	}
+	// A same-name or same-ID conflict dominates an exact row in either query
+	// order. An exact row's status cannot describe the conflicting identity.
+	if identityConflict {
+		out.State = "mismatch"
+		out.Target = "mismatch"
+		out.TargetStatus = ""
 	}
 	return out, nil
 }

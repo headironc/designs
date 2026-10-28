@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -57,6 +58,7 @@ func instanceInventory(c lxd.InstanceServer, r receipt) (result resourceObservat
 	count := 0
 	target := false
 	mismatch := false
+	networkUnavailable := false
 	b := r.Observed.Guard
 	for _, vm := range all {
 		key := vm.Project + "/" + vm.Name
@@ -75,8 +77,12 @@ func instanceInventory(c lxd.InstanceServer, r receipt) (result resourceObservat
 			if vm.Project != "halo-ci" || vm.Name != b.Name || vm.Type != "virtual-machine" || vm.Config["user.runner-controller-id"] != b.Controller || vm.Config["user.runner-pool-id"] != b.Pool || vm.Config["volatile.base_image"] != b.Image || len(vm.Profiles) != 1 || vm.Profiles[0] != "halo-ci" || vm.Location != r.Observed.VM.VolumeLocation {
 				mismatch = true
 			}
-			if machineAttachments(c.UseProject(vm.Project), vm.Instance) != nil {
-				mismatch = true
+			if err := machineAttachments(c.UseProject(vm.Project), vm.Instance); err != nil {
+				if errors.Is(err, errNetworkUnavailable) {
+					networkUnavailable = true
+				} else {
+					mismatch = true
+				}
 			}
 		}
 		if vm.Project == "halo-ci" && vm.Name == b.Name && id != b.UUID {
@@ -104,6 +110,9 @@ func instanceInventory(c lxd.InstanceServer, r receipt) (result resourceObservat
 	}
 	if mismatch {
 		return resource("mismatch", count)
+	}
+	if networkUnavailable {
+		return unknown("lxd_network_unavailable")
 	}
 	if count == 0 && !target {
 		return resource("absent_verified", 0)
