@@ -10,7 +10,10 @@
     "format:check": "node scripts/format.ts --check",
     "format": "node scripts/format.ts --write",
     "typecheck": "tsc --noEmit",
-    "test:format": "node --test scripts/format.test.ts"
+    "test:format": "node --test scripts/format.test.ts",
+    "test:go-tools": "node --test scripts/go-check.test.ts",
+    "go:prepare": "node scripts/go-check.ts --prepare",
+    "go:check": "node scripts/go-check.ts"
   },
   "devDependencies": {
     "@types/node": "26.6.4",

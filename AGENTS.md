@@ -11,6 +11,9 @@ The legacy shared CI executor and fixed document policy are retired.
   tools, run `bun run typecheck` and `bun run test:format`; see README.md for
   dependency preparation, supported files, explicit repair and recovery.
 - Read `runner/README.md` before changing runner code. Run its affected Go checks.
+- Run `bun run go:check` for complete runner acceptance; `go:prepare` is a
+  separate online preparation step. Run `bun run test:go-tools` after changing
+  that entrypoint. README.md owns its environment and recovery instructions.
 - Run nft integration tests only in the documented private network namespace.
   Do not run the runner binary, install units, or load rules on the real host
   merely to validate a source change.

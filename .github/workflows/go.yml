@@ -1,0 +1,56 @@
+name: Go
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: go-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go runner checks
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: package.json
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: runner/go.mod
+          cache: false
+      - name: Prepare disposable job tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes build-essential dbus-daemon nftables util-linux
+      - name: Verify private namespace support
+        run: unshare --user --map-root-user --net /bin/true
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - run: bun run go:prepare
+      - run: bun run typecheck
+      - run: bun run test:go-tools
+      - run: bun run go:check
+      - name: Retain Go diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: go-check-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 3
+          if-no-files-found: ignore
+          include-hidden-files: true
+          path: |
+            runner/.build/go-check-*/*.log
+            runner/.build/go-check-*/container-*-name.txt
+            runner/.build/go-check-*/container-*-test-output.txt
