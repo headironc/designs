@@ -30,6 +30,8 @@ test("local acceptance requires an exact local image and all explicit inputs", (
     "/tools/prose",
     "--ids",
     "/tools/ids",
+    "--go-bin",
+    "/tools/go/bin",
     "--shared-bundle",
     "/fixed/shared.bundle",
     "--shared-lock",

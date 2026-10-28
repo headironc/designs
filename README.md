@@ -1,6 +1,6 @@
 # Designs
 
-本仓库维护跨仓库设计、[共享 CI 执行器](ci/contract.ts)、[本库文档检查策略](policy/docs.ts)，以及 [runner 自有 Go 实现](runner/README.md)。agents、Nucleus 与 designs 分别维护业务检查，消费同一固定执行器。代码按独立业务结果交付。
+本仓库维护跨仓库设计、[共享 CI 执行器](ci/contract.ts)、[本库格式与文档检查策略](policy/checks.ts)，以及 [runner 自有 Go 实现](runner/README.md)。agents、Nucleus 与 designs 分别维护业务检查，消费同一固定执行器。代码按独立业务结果交付。
 
 ## 当前设计
 

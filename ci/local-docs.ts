@@ -20,7 +20,7 @@ import { listSourcePaths, readSourceIdentity } from "./source.ts";
 
 const execute = promisify(execFile);
 const usage =
-  "node ci/local-docs.ts --image sha256:ID --shared-bundle FILE --shared-lock FILE --node FILE --lychee FILE --prose FILE --ids FILE --output NEW_DIRECTORY";
+  "node ci/local-docs.ts --image sha256:ID --shared-bundle FILE --shared-lock FILE --node FILE --lychee FILE --prose FILE --ids FILE --go-bin DIRECTORY --output NEW_DIRECTORY";
 type Options = {
   image: string;
   "shared-bundle": string;
@@ -29,6 +29,7 @@ type Options = {
   lychee: string;
   prose: string;
   ids: string;
+  "go-bin": string;
   output: string;
 };
 
@@ -42,6 +43,7 @@ export function parseOptions(args: string[]): Options {
     "lychee",
     "prose",
     "ids",
+    "go-bin",
     "output",
   ];
   for (let index = 0; index < args.length; index += 2) {
@@ -208,6 +210,8 @@ export async function localDocs(options: Options): Promise<string> {
     lychee: options.lychee,
     "check-prose.mjs": options.prose,
     "check-ids.mjs": options.ids,
+    go: path.join(options["go-bin"], "go"),
+    gofmt: path.join(options["go-bin"], "gofmt"),
   };
   const hash = (file: string) =>
     createHash("sha256").update(readFileSync(file)).digest("hex");

@@ -55,7 +55,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
 
 已核历史来源包 `halo-20261026` 中的两个文件。`provider.py` 生成当前消费接口、配置形状与 unit；不执行该安装脚本。新 repository 的真实 GARM UUID 尚未交付，测试仅使用合成身份。
 
-| 来源 | SHA256 |
-| --- | --- |
+| 来源                 | SHA256                                                             |
+| -------------------- | ------------------------------------------------------------------ |
 | provider-watchdog.py | `ea4bac1419541ca1032491bcbcf5f5c74905d652831f45a400d0e93ed04e766e` |
-| provider.py | `de9f034f6413447a511a7ee82caa571f9abe508e09f3c8d5688f7d399fd95584` |
+| provider.py          | `de9f034f6413447a511a7ee82caa571f9abe508e09f3c8d5688f7d399fd95584` |

@@ -55,9 +55,9 @@ RUNNER_FIREWALL_NAMESPACE=1 go test -count=1 -tags=integration \
 
 本片按已保存的原安装调用链核对，未复制历史运行包。`network.py` 生成的 unit 明确消费 `network-firewall.py`，后者先检查再提交 nft batch。
 
-| 原源码 | SHA256 |
-| --- | --- |
+| 原源码              | SHA256                                                             |
+| ------------------- | ------------------------------------------------------------------ |
 | network-firewall.py | `2d542bcad00f5624306c597bb3c063629ed81f5eaf0294d2be7e90fbdc20e693` |
-| network.py | `27eef430978620bf8d80c89c9ec49e1b1335012c4d609f67b724ac9bbf181fc6` |
+| network.py          | `27eef430978620bf8d80c89c9ec49e1b1335012c4d609f67b724ac9bbf181fc6` |
 
 原件位于接入 owner 保留的 `halo-20261026` 来源包。来源摘要用于行为追溯，不是执行授权。历史快照和其余恢复脚本不进入本片。

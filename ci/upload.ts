@@ -1,8 +1,5 @@
 import { createHash } from "node:crypto";
-import {
-  createReadStream,
-  createWriteStream,
-} from "node:fs";
+import { createReadStream, createWriteStream } from "node:fs";
 import { chmod, stat } from "node:fs/promises";
 import path from "node:path";
 import { pipeline, finished } from "node:stream/promises";

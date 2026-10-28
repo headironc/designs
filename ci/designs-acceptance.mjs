@@ -8,6 +8,7 @@ import {
   cpSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
@@ -119,7 +120,7 @@ const integration = git(
 git(candidate, "reset", "--hard", integration);
 const toolsRoot = path.join(root, "tools");
 mkdirSync(toolsRoot);
-for (const file of ["node", "lychee"]) {
+for (const file of ["node", "lychee", "go", "gofmt"]) {
   copyFileSync(`/host-tools/${file}`, path.join(toolsRoot, file));
   chmodSync(path.join(toolsRoot, file), 0o755);
 }
@@ -169,6 +170,36 @@ const tools = [
     files: [{ path: ids, sha256: digest(ids) }],
   },
 ];
+const prettierRoot = path.join(policy, "node_modules/prettier");
+tools.push(
+  {
+    name: "prettier",
+    executable: node,
+    sha256: digest(node),
+    versionArgs: [path.join(prettierRoot, "bin/prettier.cjs"), "--version"],
+    version: "3.9.9",
+    files: readdirSync(prettierRoot, { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => path.join(entry.parentPath, entry.name))
+      .sort()
+      .map((file) => ({ path: file, sha256: digest(file) })),
+  },
+  {
+    name: "go-format",
+    executable: node,
+    sha256: digest(node),
+    versionArgs: [
+      path.join(policy, "policy/format.ts"),
+      "--gofmt-version",
+      toolsRoot,
+    ],
+    version: "go1.27.3",
+    files: ["go", "gofmt"].map((name) => ({
+      path: path.join(toolsRoot, name),
+      sha256: digest(path.join(toolsRoot, name)),
+    })),
+  },
+);
 const { BoundInputs } = await import(
   pathToFileURL(path.join(shared, "ci/binding.ts")).href
 );
@@ -180,7 +211,7 @@ const { protect } = await import(
 );
 protect(toolsRoot);
 const { designsChecks, verifyDesigns } = await import(
-  pathToFileURL(path.join(policy, "policy/docs.ts")).href
+  pathToFileURL(path.join(policy, "policy/checks.ts")).href
 );
 // The real P checks its repository binding. The workflow path is a local label,
 // not evidence that a hosted workflow exists or ran.
@@ -200,7 +231,7 @@ export const inputs = BoundInputs.verify(
 const reportDirectory = path.join(root, "private");
 mkdirSync(reportDirectory, { mode: 0o700 });
 const checks = designsChecks(inputs);
-const result = await VerifiedExecution.run(inputs, "docs", checks, {
+const result = await VerifiedExecution.run(inputs, "maintenance", checks, {
   provenance: { kind: "local-container" },
   preparation: { copies: [], writable: [] },
   reportDirectory,
