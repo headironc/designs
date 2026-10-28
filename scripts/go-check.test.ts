@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
+  accessSync,
+  constants,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
@@ -177,13 +181,22 @@ test("command timeout escalates and cancellation reaps the command's real child"
 
 function fakeGo(
   root: string,
-  mode: "failure" | "skip" | "container" | "container-pass",
+  mode:
+    | "failure"
+    | "skip"
+    | "container"
+    | "container-pass"
+    | "lock-change"
+    | "lock-missing"
+    | "lock-change-success"
+    | "prepare-lock-change",
 ): void {
   const script = `#!${process.execPath}
     const fs = require("node:fs");
     const args = process.argv.slice(2);
-    if(Object.keys(process.env).some(key => key.startsWith("RUNNER_")) || process.env.GOROOT || process.env.GOFLAGS !== "-mod=readonly" || process.env.GOPROXY !== "off") { console.error("ambient Go or fixture settings leaked"); process.exit(91); }
+    if(Object.keys(process.env).some(key => key.startsWith("RUNNER_")) || process.env.GOROOT || process.env.GOFLAGS !== "-mod=readonly" || process.env.GOPROXY !== (${JSON.stringify(mode)} === "prepare-lock-change" ? "https://proxy.golang.org" : "off")) { console.error("ambient Go or fixture settings leaked"); process.exit(91); }
     if (args[0] === "version") { console.log("go version go1.27.3 linux/amd64"); process.exit(0); }
+    if (args[0] === "mod" && args[1] === "download" && ${JSON.stringify(mode)} === "prepare-lock-change") { fs.appendFileSync("go.sum", "changed\\n"); process.exit(0); }
     if (args[0] === "test" && args.includes("-c")) {
       const body = ${JSON.stringify(mode)} === "container-pass"
         ? "#!/bin/sh\\nprintf '=== RUN   TestDatabaseChildInPrivateContainer\\n--- PASS: TestDatabaseChildInPrivateContainer (0.00s)\\nPASS\\n'\\n"
@@ -195,7 +208,10 @@ function fakeGo(
       process.exit(result.status ?? 1);
     }
     if (args[0] === "test") {
-      if (${JSON.stringify(mode)} === "failure") { console.error("intentional test command failure"); process.exit(3); }
+      if (["lock-change", "lock-change-success"].includes(${JSON.stringify(mode)})) fs.appendFileSync("go.sum", "changed\\n");
+      if (${JSON.stringify(mode)} === "lock-missing") fs.unlinkSync("go.sum");
+      if (["failure", "lock-change", "lock-missing"].includes(${JSON.stringify(mode)})) { console.error("intentional test command failure"); process.exit(3); }
+      if (${JSON.stringify(mode)} === "lock-change-success") { process.stdout.write(${JSON.stringify(events())}); process.exit(0); }
       process.stdout.write(${JSON.stringify(events("pass", true))}); process.exit(0);
     }
     process.exit(0);
@@ -203,10 +219,47 @@ function fakeGo(
   writeFileSync(path.join(root, "go"), script, { mode: 0o755 });
 }
 
+function resolveExecutable(name: string, searchPath: string): string {
+  for (const directory of searchPath.split(path.delimiter)) {
+    const candidate = path.resolve(directory, name);
+    try {
+      accessSync(candidate, constants.X_OK);
+      if (statSync(candidate).isFile()) return candidate;
+    } catch (error) {
+      if (
+        !["ENOENT", "EACCES", "ENOTDIR"].includes(
+          (error as NodeJS.ErrnoException).code ?? "",
+        )
+      )
+        throw error;
+    }
+  }
+  throw new Error(`Executable is unavailable on the original PATH: ${name}`);
+}
+
+test("Docker resolution honors an executable outside /usr/bin", (t) => {
+  const root = fixture(t);
+  const executable = path.join(root, "docker");
+  writeFileSync(
+    executable,
+    `#!${process.execPath}\nconsole.log("private Docker path");\n`,
+    { mode: 0o755 },
+  );
+  const resolved = resolveExecutable(
+    "docker",
+    `${root}${path.delimiter}/usr/bin`,
+  );
+  assert.equal(resolved, executable);
+  assert.equal(
+    execFileSync(resolved, [], { encoding: "utf8" }).trim(),
+    "private Docker path",
+  );
+});
+
 // Independent teardown also runs when an assertion or the CLI's cleanup fails.
-function cleanupContainer(name: string): void {
+function cleanupContainer(name: string, dockerExecutable: string): void {
   const docker = (args: string[]) =>
-    execFileSync("/usr/bin/docker", args, {
+    execFileSync(dockerExecutable, args, {
       encoding: "utf8",
       timeout: 10_000,
     });
@@ -303,8 +356,137 @@ test("the actual CLI fails for a missing tool, test failure and unexpected skip"
   }
 });
 
-test("create uncertainty stays unknown and a lost removal reply is resolved by readback", (t) => {
-  for (const mode of ["create-unknown", "rm-unknown"] as const) {
+function isolatedCLI(root: string): string {
+  mkdirSync(path.join(root, "scripts"));
+  mkdirSync(path.join(root, "runner"));
+  const copied = path.join(root, "scripts/go-check.ts");
+  writeFileSync(copied, readFileSync(cli));
+  writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
+  writeFileSync(
+    path.join(root, "runner/go.mod"),
+    "module fixture\n\ngo 1.27.3\n",
+  );
+  writeFileSync(path.join(root, "runner/go.sum"), "original lock bytes\n");
+  return copied;
+}
+
+test("startup failures remove the short temporary directory", (t) => {
+  for (const mode of ["cache-directory", "initial-lock-read"] as const) {
+    const root = fixture(t);
+    const copied = isolatedCLI(root);
+    const marker = path.join(root, "temporary.txt");
+    const preload = path.join(root, "trace-temporary.cjs");
+    writeFileSync(
+      preload,
+      `
+      const fs = require("node:fs");
+      const original = fs.mkdtempSync;
+      fs.mkdtempSync = function(prefix, ...args) {
+        const result = original.call(this, prefix, ...args);
+        if (prefix === "/tmp/dg-") fs.writeFileSync(${JSON.stringify(marker)}, result);
+        return result;
+      };
+      require("node:module").syncBuiltinESMExports();
+    `,
+    );
+    if (mode === "cache-directory")
+      writeFileSync(path.join(root, "runner/.build"), "not a directory");
+    else rmSync(path.join(root, "runner/go.sum"));
+    const result = spawnSync(
+      process.execPath,
+      ["--require", preload, copied, "--stage=module"],
+      {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 10_000,
+      },
+    );
+    const temporary = readFileSync(marker, "utf8");
+    try {
+      assert.ifError(result.error);
+      assert.equal(result.status, 1, result.stdout + result.stderr);
+      assert.match(
+        result.stderr,
+        mode === "cache-directory" ? /ENOTDIR/ : /ENOENT.*go\.sum/,
+      );
+      assert.equal(existsSync(temporary), false, `Startup leaked ${temporary}`);
+      assert.doesNotMatch(result.stdout, /Running go/);
+    } finally {
+      rmSync(temporary, { recursive: true, force: true });
+    }
+  }
+});
+
+test("stage failures preserve their diagnostics alongside changed or unreadable module locks", (t) => {
+  for (const mode of ["lock-change", "lock-missing"] as const) {
+    const root = fixture(t);
+    const copied = isolatedCLI(root);
+    const bin = path.join(root, "bin");
+    mkdirSync(bin);
+    writeFileSync(path.join(bin, "package.json"), '{"type":"commonjs"}\n');
+    fakeGo(bin, mode);
+    const result = spawnSync(process.execPath, [copied, "--stage=module"], {
+      cwd: root,
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      encoding: "utf8",
+      timeout: 15_000,
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /go exited 3; log: .*06-go\.log/);
+    assert.match(result.stderr, /intentional test command failure/);
+    assert.match(result.stderr, /Module lock verification failed for go\.sum/);
+    assert.match(
+      result.stderr,
+      mode === "lock-change" ? /go\.sum changed/ : /ENOENT/,
+    );
+    assert.doesNotMatch(
+      result.stdout,
+      /Go stage passed|Complete Go check passed/,
+    );
+  }
+});
+
+test("preparation and check success are withheld until module locks pass final verification", (t) => {
+  for (const mode of ["lock-change-success", "prepare-lock-change"] as const) {
+    const root = fixture(t);
+    const copied = isolatedCLI(root);
+    const bin = path.join(root, "bin");
+    mkdirSync(bin);
+    writeFileSync(path.join(bin, "package.json"), '{"type":"commonjs"}\n');
+    fakeGo(bin, mode);
+    writeFileSync(
+      path.join(bin, "docker"),
+      `#!${process.execPath}\nprocess.exit(0);\n`,
+      { mode: 0o755 },
+    );
+    const result = spawnSync(
+      process.execPath,
+      [copied, mode === "prepare-lock-change" ? "--prepare" : "--stage=module"],
+      {
+        cwd: root,
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+        encoding: "utf8",
+        timeout: 15_000,
+      },
+    );
+    assert.ifError(result.error);
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /go\.sum changed/);
+    assert.doesNotMatch(
+      result.stdout,
+      /Complete Go check passed|Partial Go check passed|image prepared/,
+    );
+  }
+});
+
+test("create uncertainty stays unknown and lost replies are resolved against the original container", (t) => {
+  const dockerExecutable = resolveExecutable("docker", process.env.PATH ?? "");
+  for (const mode of [
+    "create-unknown",
+    "create-reply-lost",
+    "rm-unknown",
+  ] as const) {
     const root = fixture(t);
     fakeGo(root, "container-pass");
     const count = path.join(root, "create-count");
@@ -318,7 +500,8 @@ test("create uncertainty stays unknown and a lost removal reply is resolved by r
         fs.appendFileSync(${JSON.stringify(count)}, "attempt\\n");
         if(${JSON.stringify(mode)} === "create-unknown") {console.error("simulated lost create response");process.exit(1);}
       }
-      const result = spawnSync("/usr/bin/docker", args, {stdio:"inherit"});
+      const result = spawnSync(${JSON.stringify(dockerExecutable)}, args, {stdio: args[0] === "create" && ${JSON.stringify(mode)} === "create-reply-lost" ? "pipe" : "inherit"});
+      if(args[0] === "create" && ${JSON.stringify(mode)} === "create-reply-lost" && result.status === 0) {console.error("simulated lost successful create response");process.exit(1);}
       if(args[0] === "rm" && ${JSON.stringify(mode)} === "rm-unknown" && result.status === 0) {console.error("simulated lost remove response");process.exit(1);}
       process.exit(result.status ?? 1);
     `,
@@ -335,11 +518,49 @@ test("create uncertainty stays unknown and a lost removal reply is resolved by r
     )?.[1];
     try {
       assert.ifError(result.error);
+      assert.ok(name, result.stdout + result.stderr);
       assert.equal(readFileSync(count, "utf8").trim().split("\n").length, 1);
       if (mode === "create-unknown") {
         assert.equal(result.status, 1, result.stdout + result.stderr);
         assert.match(result.stderr, /creation outcome unknown/);
         assert.doesNotMatch(result.stdout, /Private container absent/);
+      } else if (mode === "create-reply-lost") {
+        assert.equal(result.status, 1, result.stdout + result.stderr);
+        assert.match(
+          result.stderr,
+          /simulated lost successful create response/,
+        );
+        assert.match(
+          result.stdout,
+          /Container terminal: [a-f0-9]{64} created exit=0/,
+        );
+        assert.match(result.stdout, /Private container absent/);
+        assert.doesNotMatch(
+          result.stdout,
+          /Running docker start|Go stage passed/,
+        );
+        const id = /Container terminal: ([a-f0-9]{64})/.exec(
+          result.stdout,
+        )?.[1];
+        assert.ok(id);
+        for (const filter of [`id=${id}`, `name=^/${name}$`])
+          assert.equal(
+            execFileSync(
+              dockerExecutable,
+              [
+                "container",
+                "ls",
+                "--all",
+                "--no-trunc",
+                "--filter",
+                filter,
+                "--format",
+                "{{.ID}}",
+              ],
+              { encoding: "utf8", timeout: 10_000 },
+            ).trim(),
+            "",
+          );
       } else {
         assert.equal(result.status, 0, result.stdout + result.stderr);
         assert.match(
@@ -349,12 +570,13 @@ test("create uncertainty stays unknown and a lost removal reply is resolved by r
         assert.match(result.stdout, /Private container absent/);
       }
     } finally {
-      if (name) cleanupContainer(name);
+      if (name) cleanupContainer(name, dockerExecutable);
     }
   }
 });
 
 test("CLI cancellation and forced termination leave no owned Docker fixture", async (t) => {
+  const dockerExecutable = resolveExecutable("docker", process.env.PATH ?? "");
   for (const signal of ["SIGTERM", "SIGKILL"] as const) {
     const root = fixture(t);
     fakeGo(root, "container");
@@ -391,7 +613,7 @@ test("CLI cancellation and forced termination leave no owned Docker fixture", as
       assert.ok(name, output + errors);
       assert.ok(output.includes("Running docker wait"), output + errors);
       const network = execFileSync(
-        "docker",
+        dockerExecutable,
         ["inspect", "--format", "{{.HostConfig.NetworkMode}}", name],
         { encoding: "utf8", timeout: 10_000 },
       ).trim();
@@ -404,7 +626,7 @@ test("CLI cancellation and forced termination leave no owned Docker fixture", as
         assert.match(output, /Private container absent:/);
         assert.equal(
           execFileSync(
-            "docker",
+            dockerExecutable,
             [
               "container",
               "ls",
@@ -430,7 +652,7 @@ test("CLI cancellation and forced termination leave no owned Docker fixture", as
       name ??= /Private container handle: (designs-go-[a-f0-9-]+)/.exec(
         output,
       )?.[1];
-      if (name) cleanupContainer(name);
+      if (name) cleanupContainer(name, dockerExecutable);
     }
   }
 });

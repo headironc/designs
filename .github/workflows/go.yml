@@ -15,7 +15,7 @@ concurrency:
 jobs:
   go:
     name: Go runner checks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -35,6 +35,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes build-essential dbus-daemon nftables util-linux
+      - name: Verify private namespace support
+        run: unshare --user --map-root-user --net /bin/true
       - run: bun install --frozen-lockfile --ignore-scripts
       - run: bun run go:prepare
       - run: bun run typecheck

@@ -301,42 +301,44 @@ export async function checkGo(
   const env = goEnvironment(mode === "prepare");
   // Short real test paths avoid the Unix socket limit; build files stay on disk.
   const temporary = mkdtempSync("/tmp/dg-");
-  env.TMPDIR = temporary;
-  for (const name of ["GOCACHE", "GOMODCACHE", "GOTMPDIR"])
-    mkdirSync(env[name]!, { recursive: true });
-  const work = mkdtempSync(path.join(runner, ".build/go-check-"));
-  console.log(`Go check logs and artifacts: ${work}`);
-  const locks = ["go.mod", "go.sum"].map((file) =>
-    readFileSync(path.join(runner, file)),
-  );
-  let sequence = 0;
   let temporaryClosed = true;
-  const run = (
-    command: string,
-    commandArgs: string[],
-    settings: {
-      timeoutMs?: number;
-      env?: NodeJS.ProcessEnv;
-      cleanup?: boolean;
-      input?: string;
-    } = {},
-  ) => {
-    const label = `${String(++sequence).padStart(2, "0")}-${path.basename(command)}.log`;
-    console.log(`Running ${command} ${commandArgs.join(" ")} (${label})`);
-    return runCommand(command, commandArgs, {
-      cwd: runner,
-      env: settings.env ?? env,
-      log: path.join(work, label),
-      timeoutMs: settings.timeoutMs ?? 120_000,
-      signal: settings.cleanup ? undefined : signal,
-      input: settings.input,
-    }).catch((error) => {
-      if (error instanceof CommandFailure && !error.groupClosed)
-        temporaryClosed = false;
-      throw error;
-    });
-  };
+  let locks: Buffer[] | undefined;
+  const failures: unknown[] = [];
   try {
+    env.TMPDIR = temporary;
+    for (const name of ["GOCACHE", "GOMODCACHE", "GOTMPDIR"])
+      mkdirSync(env[name]!, { recursive: true });
+    const work = mkdtempSync(path.join(runner, ".build/go-check-"));
+    console.log(`Go check logs and artifacts: ${work}`);
+    locks = ["go.mod", "go.sum"].map((file) =>
+      readFileSync(path.join(runner, file)),
+    );
+    let sequence = 0;
+    const run = (
+      command: string,
+      commandArgs: string[],
+      settings: {
+        timeoutMs?: number;
+        env?: NodeJS.ProcessEnv;
+        cleanup?: boolean;
+        input?: string;
+      } = {},
+    ) => {
+      const label = `${String(++sequence).padStart(2, "0")}-${path.basename(command)}.log`;
+      console.log(`Running ${command} ${commandArgs.join(" ")} (${label})`);
+      return runCommand(command, commandArgs, {
+        cwd: runner,
+        env: settings.env ?? env,
+        log: path.join(work, label),
+        timeoutMs: settings.timeoutMs ?? 120_000,
+        signal: settings.cleanup ? undefined : signal,
+        input: settings.input,
+      }).catch((error) => {
+        if (error instanceof CommandFailure && !error.groupClosed)
+          temporaryClosed = false;
+        throw error;
+      });
+    };
     const version = (await run("go", ["version"])).trim();
     const required = /^go (\S+)$/m.exec(locks[0]!.toString("utf8"))?.[1];
     if (!required || version !== `go version go${required} linux/amd64`)
@@ -347,9 +349,6 @@ export async function checkGo(
       await run("docker", ["pull", "--platform=linux/amd64", image], {
         timeoutMs: 600_000,
       });
-      console.log(
-        "Go dependencies and private test image prepared; no checks claimed.",
-      );
       return;
     }
     for (const stage of mode) {
@@ -571,23 +570,57 @@ export async function checkGo(
       }
       console.log(`Go stage passed: ${stage}`);
     }
-    console.log(
-      mode.length === stages.length
-        ? "Complete Go check passed: module, container, nft"
-        : `Partial Go check passed: ${mode.join(", ")}; full acceptance requires module, container, nft`,
-    );
+  } catch (error) {
+    failures.push(error);
   } finally {
-    if (temporaryClosed) rmSync(temporary, { recursive: true, force: true });
-    else
-      console.error(
-        `Process cleanup unknown; retain temporary files at ${temporary}`,
-      );
-    for (const [index, file] of ["go.mod", "go.sum"].entries()) {
-      if (!locks[index]!.equals(readFileSync(path.join(runner, file))))
-        throw new Error(
-          `${file} changed; inspect source changes before retrying`,
+    try {
+      if (temporaryClosed) rmSync(temporary, { recursive: true, force: true });
+      else
+        console.error(
+          `Process cleanup unknown; retain temporary files at ${temporary}`,
         );
+    } catch (error) {
+      failures.push(
+        new Error(
+          `Temporary cleanup failed at ${temporary}: ${String(error)}`,
+          { cause: error },
+        ),
+      );
     }
+    if (locks) {
+      for (const [index, file] of ["go.mod", "go.sum"].entries()) {
+        try {
+          if (!locks[index]!.equals(readFileSync(path.join(runner, file))))
+            throw new Error(
+              `${file} changed; inspect source changes before retrying`,
+            );
+        } catch (error) {
+          failures.push(
+            new Error(
+              `Module lock verification failed for ${file}: ${String(error)}`,
+              { cause: error },
+            ),
+          );
+        }
+      }
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1)
+      throw new AggregateError(
+        failures,
+        failures
+          .map((error) =>
+            error instanceof Error ? error.message : String(error),
+          )
+          .join("\n"),
+      );
+    console.log(
+      mode === "prepare"
+        ? "Go dependencies and private test image prepared; no checks claimed."
+        : mode.length === stages.length
+          ? "Complete Go check passed: module, container, nft"
+          : `Partial Go check passed: ${mode.join(", ")}; full acceptance requires module, container, nft`,
+    );
   }
 }
 

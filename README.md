@@ -48,7 +48,9 @@ bun run format README.md
 
 ## Go 检查
 
-[原生 Go 工作流](.github/workflows/go.yml)与本地使用同一个入口。运行环境为 Linux amd64。Node/Bun 版本见根 manifest，完整 Go SDK 版本见 `runner/go.mod`。另准备 GCC、`dbus-daemon`、Docker daemon、`unshare` 和 `/usr/sbin/nft`。真实进程测试要求非根 unified cgroup。nft 测试要求允许创建私有 user/network namespace。缺条件会失败，不将 skip 解释为通过。工作流在一次性 GitHub hosted job 中用 apt 准备系统工具。本地命令不安装包、修改服务或安全策略。
+[原生 Go 工作流](.github/workflows/go.yml)与本地使用同一个入口。运行环境为满足以下条件的 Linux amd64，不是任意 Linux 宿主。Node/Bun 版本见根 manifest，完整 Go SDK 版本见 `runner/go.mod`。另准备 GCC、`dbus-daemon`、Docker daemon、`unshare` 和 `/usr/sbin/nft`。真实进程测试要求非根 unified cgroup。nft 测试要求允许创建私有 user/network namespace。缺条件会失败，不将 skip 解释为通过。本地命令不安装包、修改服务或安全策略。
+
+Go 工作流固定使用 GitHub hosted `ubuntu-22.04`，在一次性 job 中用 apt 准备系统工具。随后以普通用户执行 `unshare --user --map-root-user --net /bin/true` 预检，失败就停止。Ubuntu 24.04 及后续版本默认限制无特权 user namespace，不能假定 `ubuntu-latest` 满足上述条件。不要用 sudo 运行测试，也不要修改 sysctl 或 AppArmor 来绕过拒绝。升级 runner 环境时重新验证 module、container 和 nft 三层；旧环境或部分层成功不证明新环境完整可用。平台支持范围见 [GitHub hosted runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)，发行版限制见 [Docker rootless 故障说明](https://docs.docker.com/engine/security/rootless/troubleshoot/)。
 
 Go SDK 下载与模块准备分开。先按 [runner 工具链说明](runner/README.md#构建与检查)验证官方归档摘要。完整解包到临时或忽略目录，再将 `bin` 加入当前 shell 的 `PATH`。不要用仅含 `go`/`gofmt` 的格式工具目录编译。随后在仓库根运行：
 
@@ -62,7 +64,7 @@ bun run go:check
 
 `go:prepare` 通过官方模块代理和校验数据库下载锁定依赖。它还拉取脚本固定 digest 的 Ubuntu 26.04 Linux amd64 夹具镜像。准备成功不代表检查通过。检查阶段关闭 Go 网络代理与校验数据库。Docker 只消费已有镜像，不自动联网补装工具。Go 使用 `GOTOOLCHAIN=local`、`GOWORK=off`、`GOENV=off` 和 `GOFLAGS=-mod=readonly`，前后确认 `go.mod`/`go.sum` 未改变。继承的 `GO*` 设置与 `RUNNER_*` 夹具开关会被清除，再按对应层设置，避免将私有容器用例带到宿主。
 
-默认 `go:check` 依次完成 module、container 和 nft 三层，全部通过才输出完整成功。module 运行 `go mod verify`、全模块 `go test -race -count=1`、`go vet` 和五个命令的 `CGO_ENABLED=0` Linux amd64 构建。测试使用真实私有 D-Bus。Go JSON 事件必须证明实际进程身份测试执行并通过。普通层唯一允许跳过的测试是另行隔离运行的容器用例。没有测试文件的包由 `go list` 明确识别，其他测试或包的 skip、必需测试缺失和重复结果均失败。
+默认 `go:check` 依次完成 module、container 和 nft 三层，全部通过才输出完整成功。module 运行 `go mod verify`、全模块 `go test -race -count=1`、`go vet` 和五个命令的 `CGO_ENABLED=0` Linux amd64 构建。测试使用真实私有 D-Bus。Go JSON 事件必须证明实际进程身份测试执行并通过。普通层唯一允许跳过的测试是另行隔离运行的容器用例。没有测试文件的包由 `go list` 明确识别，其他测试或包的 skip 均失败。必需测试必须恰好运行一次并给出预期终态，缺失或重复均失败。
 
 container 层使用静态 lifecycle 测试产物。只读挂入一次性无网络容器后，复制到可替换的 `/tmp/lifecycle.test`。容器中创建 UID 24567/GID 24568 的私有 NSS fixture。数据库目录初始不存在，不挂业务 socket、数据库或凭据。原 [降权用例](runner/closure.md#验证与后续边界)必须真实通过，日志由 Go `test2json` 转成事件验证。nft 层沿 [原 namespace 测试](runner/README.md#构建与检查)在内部执行 `unshare`。核网络 namespace 已改变后才调用 nft。它不在宿主加载规则，也不运行 runner 服务或安装 unit。
 
