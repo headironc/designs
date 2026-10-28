@@ -18,6 +18,10 @@ The legacy shared CI executor and fixed document policy are retired.
   checker, then `bun run links:check` for all Markdown internal links. After
   changing this tooling, run `bun run typecheck` and `bun run test:links`.
   README.md owns the source scope, platform limits and recovery instructions.
+- Use `bun run go:vuln:prepare` for explicit online preparation, then
+  `bun run go:vuln:check` for the selected Linux Go source graph. Run
+  `bun run test:go-vuln` after changing this tooling and `test:go-tools` after
+  changing its shared command lifecycle. README.md owns findings, scope and recovery.
 - Run nft integration tests only in the documented private network namespace.
   Do not run the runner binary, install units, or load rules on the real host
   merely to validate a source change.

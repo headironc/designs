@@ -79,10 +79,17 @@ type Stage = (typeof stages)[number];
 export class CommandFailure extends Error {
   readonly started: boolean;
   readonly groupClosed: boolean;
-  constructor(message: string, started: boolean, groupClosed = true) {
+  readonly exitCode: number | undefined;
+  constructor(
+    message: string,
+    started: boolean,
+    groupClosed = true,
+    exitCode?: number,
+  ) {
     super(message);
     this.started = started;
     this.groupClosed = groupClosed;
+    this.exitCode = exitCode;
   }
 }
 
@@ -334,6 +341,10 @@ export async function runCommand(
       throw new CommandFailure(
         `${command} ${reason ?? `exited ${status.code ?? status.signal}`}; log: ${options.log}${supervisorFailure ? "\n" + supervisorFailure : ""}${detail ? "\n" + detail : ""}`,
         options.supervisor ? targetStarted : child.pid !== undefined,
+        true,
+        !reason && !status.signal && !supervisorFailure && !options.supervisor
+          ? (status.code ?? undefined)
+          : undefined,
       );
     }
     return Buffer.concat(output).toString("utf8");

@@ -68,6 +68,33 @@ lychee 在独立控制目录运行，并使用显式空配置。固定参数强�
 
 成功退出 0；内部断链退出 1，并报告仓库路径、可用的行号、目标及原因。缺工具、摘要或版本错误、输入遗漏、解析诊断、并发修改等检查错误退出 2。检查不会联网补装或自动修复文档。先按原错误修复路径、目标或环境，再运行同一入口；工具损坏时重新运行 `links:prepare`。网络或校验失败时保留错误，核对官方发布材料后再准备，不改用宿主任意版本。升级通过普通 PR 同时更新唯一工具声明和说明，重新执行准备、`test:links`、`links:check`、类型及格式检查。回退源码后，按回退版本重新准备工具并检查。
 
+## Go 依赖漏洞检查
+
+漏洞检查与完整 Go 测试分别运行。[原生 Go 工作流](.github/workflows/go.yml)中的独立 job 使用同一命令，不需要 Docker、nft 或 runner 服务。环境为 Linux amd64、可用的 `/proc/self/fd`、Node/Bun 和完整 Go 1.27.3 SDK。SDK 可通过当前 `PATH` 或 `DESIGNS_GO_BIN` 指定，工具会核对版本。首次运行先显式准备：
+
+```sh
+bun install --frozen-lockfile --ignore-scripts
+bun run go:vuln:prepare
+bun run test:go-vuln
+bun run go:vuln:check
+```
+
+`go:vuln:prepare` 通过 `proxy.golang.org` 与 `sum.golang.org` 构建固定的 `govulncheck v1.9.0`，并下载 runner 锁定模块。构建使用 Go 1.27.3、Linux amd64、`GOAMD64=v1`、`CGO_ENABLED=0`、`-trimpath` 和 `-buildvcs=false`。唯一工具声明位于 [go-vuln.ts](scripts/go-vuln.ts)，包含固定二进制 SHA-256；版本输出不能替代字节校验。下载、构建、校验和收尾成功后才原子替换工具，准备失败保留旧安装和本次日志。准备不会下载 SDK、拉取镜像或修改用户配置，也不代表扫描通过。
+
+检查先验证工具字节与构建身份，再执行私有副本。源码来自 Git 已跟踪文件及未忽略的新文件中的 `runner/`，排除工作树删除项；忽略文件不能补入源码。路径与文件拒绝符号链接和特殊文件，副本、原源码及模块锁均核对前后内容。当前入口拒绝模块 replace 指令，避免从副本之外补入源码。并发修改或清理失败属于操作失败。Go 使用 `GOENV=off`、`GOWORK=off`、`GOTOOLCHAIN=local`、`GOFLAGS=-mod=readonly`；检查关闭模块代理与校验数据库，不自动补装依赖。环境按允许列表构造，外部代理、令牌、Go 设置及 runner 夹具变量不会传入工具。
+
+扫描前执行离线 `go mod verify`，核对已准备模块缓存的完整性。缓存损坏属于操作失败，先保留日志，再重新准备对应缓存。
+
+原生命令固定为 `govulncheck -db=https://vuln.go.dev -scan=symbol -test -tags=integration -show=version,verbose ./...`。它分析 Linux amd64、启用 cgo 的源码导入图，包含测试及 integration 标签，但不运行测试、runner 服务或 nft。范围包含该图使用的模块和标准库，不等于 `go list -m all` 的完整模块列表，也不涵盖其他平台或未选 build tags。报告保留可达函数、已导入包和仅模块层面的发现，不能把“无可达发现”解释为“所有依赖无漏洞”。工具的 module 模式要求当前目录有 Go 文件且不接受包 pattern，因此本入口不使用该模式。
+
+CLI 退出 0 表示所选源码图没有可达发现，退出 1 表示原生扫描正常完成并返回漏洞状态 3，退出 2 表示输入、工具、数据库、取消、超时、源码变化或清理错误。JSON/SARIF 即使命中也可能退出 0，不能代替这里的原生 text 状态判断。扫描误差仍需结合调用方式与部署事实审查，报告不是可利用性的证明。官方数据库在线更新；相同源码在不同时间可能得到不同结果，日志包含工具、Go、数据库地址和更新时间。单独 `-version` 不执行扫描，也不证明数据库完整可用。
+
+首次接入的真实扫描已在当前 LXD 依赖报告五项可达发现，入口会保留失败；这不是已通过的安全验收。发现交给 runner 业务 owner 核实公告、实际使用及修复方案。依赖升级或业务修复另按对应授权实施，本工具不自动升级、屏蔽发现或将失败降为警告。
+
+工具、模块与编译缓存位于忽略的 `.cache/designs-go-vuln/`。每次原件保存在 `run-*` 目录，包含编号日志与 `source-manifest.json`。原生扫描退出码写入 CLI 结果，完整发现保存在 `*-govulncheck.log`。正常结束会删除本次 source/control 副本；取消或单命令十分钟超时先终止进程组，CLI 总期限十五分钟，完成有界清理后失败。若进程清理未知，保留副本并按日志核查原 PID/进程组，不直接重跑或删除现场。CI 上传 `go-vuln-<run_id>-<attempt>`，仅包含日志与源码摘要，保留三天，不上传源码副本、模块缓存或可执行文件。
+
+恢复时先保留失败原件：缺工具、摘要错误或缺模块时重新运行准备；数据库或网络错误在确认原因后重试检查；源码并发变化先稳定工作树。取消不代表漏洞结果。工具升级时在独立缓存用固定 SDK 和同一构建参数至少构建两次，比较二进制 SHA-256，并核官方模块校验与 `go version -m`。在普通 PR 中一起更新唯一工具声明、Go 版本约束及本说明，重新运行准备、真实正常/命中/操作失败回归、类型、格式和链接检查。共享命令生命周期变化还须运行 `test:go-tools`。回退源码后按回退声明重新准备；不要修改摘要来接受来历不明的现有二进制。
+
 ## Go 检查
 
 [原生 Go 工作流](.github/workflows/go.yml)与本地使用同一个入口。运行环境为满足以下条件的 Linux amd64，不是任意 Linux 宿主。Node/Bun 版本见根 manifest，完整 Go SDK 版本见 `runner/go.mod`。另准备 GCC、`dbus-daemon`、Docker daemon、`unshare` 和 `/usr/sbin/nft`。真实进程测试要求非根 unified cgroup。nft 测试要求允许创建私有 user/network namespace。缺条件会失败，不将 skip 解释为通过。本地命令不安装包、修改服务或安全策略。
