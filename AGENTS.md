@@ -7,6 +7,9 @@ The legacy shared CI executor and fixed document policy are retired.
 - Read `ci-architecture.md` for the current CI direction. Do not restore the
   retired shared executor, frozen policy or admission controller.
 - Check changed documents with the pinned formatter using explicit file paths.
+- Use `bun run format:check` for the full source check. After changing formatting
+  tools, run `bun run typecheck` and `bun run test:format`; see README.md for
+  dependency preparation, supported files, explicit repair and recovery.
 - Read `runner/README.md` before changing runner code. Run its affected Go checks.
 - Run nft integration tests only in the documented private network namespace.
   Do not run the runner binary, install units, or load rules on the real host

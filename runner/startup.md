@@ -6,15 +6,15 @@
 
 正常启动入口为 `--check-startup`。同一二进制另有独立的 [watchdog 检查](guard-watchdog.md)，以及无参数的 [VM 创建](create.md)、[删除](delete.md)和[正常读取](read.md)入口。真实和有效 UID 必须匹配本机 `nucleiron` 用户，有效 GID 匹配其主组；root 调用也拒绝。正常启动不执行 native provider，不访问 GARM、GitHub、LXD 或 systemd API。
 
-| 输入 | 校验与含义 |
-| --- | --- |
-| `/etc/nucleus-halo/provider-policy.json` | root 所有、`0644`、单链接普通文件，上限 64 KiB；必填 `provider_sha256` 和 `config_sha256`，均为小写 SHA256；其他字段归对应消费者校验 |
-| `/opt/nucleus-halo/bin/garm-provider-lxd` | root 所有、`0755`、单链接普通文件；流式计算原字节摘要并与 policy 对比，不执行程序 |
-| `/etc/nucleus-halo/garm-provider-lxd.toml` | root 所有、`0644`、单链接普通文件；核原字节摘要，本片不解析或重写 TOML |
-| `/var/lib/nucleiron/provider-guard` | 服务用户所有、`0700` 的真实目录；固定目录描述符用于读取锁和状态 |
-| `operation.lock` | 预先存在，服务用户所有、`0600`、单链接普通文件；非阻塞排他锁覆盖完整检查，不创建或替换锁文件 |
-| `state.json` | 服务用户所有、`0600`、单链接普通文件，上限 64 KiB；准确版本 `1`，必填 `active/intent/latch`，不接受未知字段 |
-| `/run/nucleiron-records-only` | 任何现存条目都拒绝，包括目录、文件、FIFO 和悬空链接；其他读取错误也拒绝，不读取许可或调用维护校验器 |
+| 输入                                       | 校验与含义                                                                                                                           |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `/etc/nucleus-halo/provider-policy.json`   | root 所有、`0644`、单链接普通文件，上限 64 KiB；必填 `provider_sha256` 和 `config_sha256`，均为小写 SHA256；其他字段归对应消费者校验 |
+| `/opt/nucleus-halo/bin/garm-provider-lxd`  | root 所有、`0755`、单链接普通文件；流式计算原字节摘要并与 policy 对比，不执行程序                                                    |
+| `/etc/nucleus-halo/garm-provider-lxd.toml` | root 所有、`0644`、单链接普通文件；核原字节摘要，本片不解析或重写 TOML                                                               |
+| `/var/lib/nucleiron/provider-guard`        | 服务用户所有、`0700` 的真实目录；固定目录描述符用于读取锁和状态                                                                      |
+| `operation.lock`                           | 预先存在，服务用户所有、`0600`、单链接普通文件；非阻塞排他锁覆盖完整检查，不创建或替换锁文件                                         |
+| `state.json`                               | 服务用户所有、`0600`、单链接普通文件，上限 64 KiB；准确版本 `1`，必填 `active/intent/latch`，不接受未知字段                          |
+| `/run/nucleiron-records-only`              | 任何现存条目都拒绝，包括目录、文件、FIFO 和悬空链接；其他读取错误也拒绝，不读取许可或调用维护校验器                                  |
 
 policy 与 state 的大小上限用于限制本地输入内存。文件类型、owner、权限位和硬链接数从打开的描述符核验，特殊权限位也拒绝。`openat2` 拒绝路径各级符号链接；状态文件通过固定目录的 `openat` 读取。宿主要求 Linux 5.6 或更新内核并允许这些系统调用；不支持时明确拒绝，不降级为宽松路径读取。
 
