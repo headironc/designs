@@ -45,3 +45,31 @@ bun run format README.md
 工作流在 PR 和 `main` push 上运行格式、类型与工具回归，仅持源码读取权限。当前使用 GitHub hosted `ubuntu-latest`；真实调度结果与 required checks 由平台交付另行核验。格式通过不代表完整 Go、文档结构或安全检查通过。依赖准备失败时保留原错误，核对工具版本、网络和锁文件；用相同锁重新准备后再检查，不通过删除检查或修改锁文件掩盖失败。工具或配置修复使用普通 PR，并保持 manifest 与锁文件一致；回退同样恢复配套源码、配置和锁。
 
 旧执行器与配方的准确版本保留在 Git 历史。原操作和未知结果的恢复继续使用原身份与原材料，不通过恢复旧门禁或兼容桥接实现。
+
+## Go 检查
+
+[原生 Go 工作流](.github/workflows/go.yml)与本地使用同一个入口。运行环境为 Linux amd64。Node/Bun 版本见根 manifest，完整 Go SDK 版本见 `runner/go.mod`。另准备 GCC、`dbus-daemon`、Docker daemon、`unshare` 和 `/usr/sbin/nft`。真实进程测试要求非根 unified cgroup。nft 测试要求允许创建私有 user/network namespace。缺条件会失败，不将 skip 解释为通过。工作流在一次性 GitHub hosted job 中用 apt 准备系统工具。本地命令不安装包、修改服务或安全策略。
+
+Go SDK 下载与模块准备分开。先按 [runner 工具链说明](runner/README.md#构建与检查)验证官方归档摘要。完整解包到临时或忽略目录，再将 `bin` 加入当前 shell 的 `PATH`。不要用仅含 `go`/`gofmt` 的格式工具目录编译。随后在仓库根运行：
+
+```sh
+bun install --frozen-lockfile --ignore-scripts
+bun run go:prepare
+bun run typecheck
+bun run test:go-tools
+bun run go:check
+```
+
+`go:prepare` 通过官方模块代理和校验数据库下载锁定依赖。它还拉取脚本固定 digest 的 Ubuntu 26.04 Linux amd64 夹具镜像。准备成功不代表检查通过。检查阶段关闭 Go 网络代理与校验数据库。Docker 只消费已有镜像，不自动联网补装工具。Go 使用 `GOTOOLCHAIN=local`、`GOWORK=off`、`GOENV=off` 和 `GOFLAGS=-mod=readonly`，前后确认 `go.mod`/`go.sum` 未改变。继承的 `GO*` 设置与 `RUNNER_*` 夹具开关会被清除，再按对应层设置，避免将私有容器用例带到宿主。
+
+默认 `go:check` 依次完成 module、container 和 nft 三层，全部通过才输出完整成功。module 运行 `go mod verify`、全模块 `go test -race -count=1`、`go vet` 和五个命令的 `CGO_ENABLED=0` Linux amd64 构建。测试使用真实私有 D-Bus。Go JSON 事件必须证明实际进程身份测试执行并通过。普通层唯一允许跳过的测试是另行隔离运行的容器用例。没有测试文件的包由 `go list` 明确识别，其他测试或包的 skip、必需测试缺失和重复结果均失败。
+
+container 层使用静态 lifecycle 测试产物。只读挂入一次性无网络容器后，复制到可替换的 `/tmp/lifecycle.test`。容器中创建 UID 24567/GID 24568 的私有 NSS fixture。数据库目录初始不存在，不挂业务 socket、数据库或凭据。原 [降权用例](runner/closure.md#验证与后续边界)必须真实通过，日志由 Go `test2json` 转成事件验证。nft 层沿 [原 namespace 测试](runner/README.md#构建与检查)在内部执行 `unshare`。核网络 namespace 已改变后才调用 nft。它不在宿主加载规则，也不运行 runner 服务或安装 unit。
+
+编译缓存和日志放在忽略的 `runner/.build/`。测试使用本次创建的短真实 `/tmp/dg-*` 目录。Go 1.27 的 `testing.T.TempDir` 优先使用 `GOTMPDIR`。`go test -exec` 仅对测试进程切换到短路径，大编译目录仍留在工作树。子进程使用 umask `022`，让现有夹具的准确权限合同成立。CLI 只在同步 spawn 窗口设置并立即恢复父进程 umask，不改变宿主配置。日志与容器句柄显式使用 `0600`。
+
+恢复或分权限运行时，可执行 `bun run go:check --stage=module`、`--stage=container` 或 `--stage=nft`。每次只对指定层声明部分结果。首次交付或串联入口变化时验证默认全入口。后续接纳可合并同候选和适用输入下仍有效的三层证据，不重跑未变层。默认 CLI 仅在本次完整执行通过时打印完整成功。未知、空白或重复选择直接失败。`test:go-tools` 包含有界的真实子进程取消与私有 Docker 清理回归，要求先完成工具和镜像准备。
+
+CLI 为每条命令保留日志，使用独立进程组。准备总期限为 20 分钟，检查为 30 分钟；到期后仍执行有界清理。超时或收到 SIGINT/SIGTERM 时先发 TERM，再按需 KILL，并核组已结束。容器随机名称在 create 前写入本次工作目录；create/start 不自动重发。清理沿原名称与 ID 读取状态，确认停止后删除，再核名称与 ID 均消失。create 结果未知且暂未查到对象时保留 unknown，不能宣称清理完成。删除客户端报错后仍回读原对象，确认已移除才结束。
+
+检查失败先读日志并修复对应输入或环境，再决定重跑范围。CLI 会输出有界的错误原因及原日志路径。CI 在 run 的 Artifacts 中保留 `go-check-<run_id>-<attempt>` 三天。内容为本次日志、容器句柄和测试输出，不上传 SDK、模块缓存或二进制。取消会在清理后返回失败。强制 SIGKILL、daemon 不可达或清理超时可能留下未知结果。保留日志和 `container-name.txt`，沿原名称查询，不重新 create。确认原容器终态后处理该对象；不要用删日志、换名称或启动第二份检查绕过未知结果。源码修复与依赖升级通过普通 PR 完成，原操作材料保留。完整 Go 通过仍不代表生产部署、文档结构或安全扫描已验收。
