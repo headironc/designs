@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	lxd "github.com/canonical/lxd/client"
@@ -23,6 +24,10 @@ type machine struct {
 	VolumeContent  string `json:"volume_content_type"`
 	VolumeLocation string `json:"volume_location"`
 	VolumeUsedBy   string `json:"volume_used_by"`
+}
+
+func (m machine) valid(name, vmUUID string) bool {
+	return m.PID > 0 && m.PID <= 2147483647 && m.VolumeName == name && uuidPattern.MatchString(m.VolumeUUID) && m.VolumeUUID != vmUUID && m.VolumeType == "virtual-machine" && m.VolumePool == "halo-ci" && m.VolumeProject == "halo-ci" && m.VolumeContent == "block" && m.VolumeUsedBy == "/1.0/instances/"+name+"?project=halo-ci"
 }
 
 type lxdTransport struct{ transport *http.Transport }
@@ -45,6 +50,40 @@ func (t *lxdTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		response.Body.Close()
 		return nil, errRefused
 	}
+	if req.URL.Path == "/1.0/instances" && strings.HasPrefix(req.URL.Query().Get("recursion"), "2") {
+		var rows []map[string]json.RawMessage
+		if json.Unmarshal(body.Metadata, &rows) != nil || rows == nil {
+			return nil, errRefused
+		}
+		for _, row := range rows {
+			for _, key := range []string{"snapshots", "backups"} {
+				var values []json.RawMessage
+				// RenderFull leaves empty lists nil; the API fields have no
+				// omitempty. Explicit null is its empty-list representation.
+				if len(row[key]) == 0 || json.Unmarshal(row[key], &values) != nil {
+					return nil, errRefused
+				}
+			}
+		}
+	}
+	if req.URL.Path == "/1.0/storage-pools/halo-ci/volumes" {
+		var rows []json.RawMessage
+		if json.Unmarshal(body.Metadata, &rows) != nil || rows == nil {
+			return nil, errRefused
+		}
+	}
+	if req.URL.Path == "/1.0/operations" {
+		var groups map[string]json.RawMessage
+		if json.Unmarshal(body.Metadata, &groups) != nil || groups == nil {
+			return nil, errRefused
+		}
+		for _, group := range groups {
+			var rows []json.RawMessage
+			if json.Unmarshal(group, &rows) != nil || rows == nil {
+				return nil, errRefused
+			}
+		}
+	}
 	return response, nil
 }
 
@@ -53,6 +92,12 @@ func observeMachine(ctx context.Context, b provider.ExecutionBinding) (machine, 
 }
 
 func lxdMachine(ctx context.Context, socket string, b provider.ExecutionBinding) (machine, error) {
+	var result machine
+	err := withMachineClient(ctx, socket, func(client lxd.InstanceServer) error { var err error; result, err = readMachine(client, b); return err })
+	return result, err
+}
+
+func withMachineClient(ctx context.Context, socket string, observe func(lxd.InstanceServer) error) error {
 	client, err := lxd.ConnectLXDUnixWithContext(ctx, socket, &lxd.ConnectionArgs{
 		HTTPClient: &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errRefused }},
 		TransportWrapper: func(t *http.Transport) lxd.HTTPTransporter {
@@ -65,18 +110,18 @@ func lxdMachine(ctx context.Context, socket string, b provider.ExecutionBinding)
 		},
 	})
 	if err != nil {
-		return machine{}, err
+		return err
 	}
 	defer client.Disconnect()
 	httpClient, err := client.GetHTTPClient()
 	if err != nil {
-		return machine{}, err
+		return err
 	}
 	defer httpClient.CloseIdleConnections()
 	if !client.HasExtension("virtual-machines") {
-		return machine{}, errRefused
+		return errRefused
 	}
-	return readMachine(client.UseProject("halo-ci"), b)
+	return observe(client.UseProject("halo-ci"))
 }
 
 func readMachine(client lxd.InstanceServer, b provider.ExecutionBinding) (machine, error) {
@@ -84,9 +129,19 @@ func readMachine(client lxd.InstanceServer, b provider.ExecutionBinding) (machin
 	if err != nil || vm == nil || vm.Name != b.Name || vm.Type != "virtual-machine" || len(vm.Profiles) != 1 || vm.Profiles[0] != "halo-ci" || vm.Config["volatile.uuid"] != b.UUID || vm.Config["volatile.base_image"] != b.Image || vm.Config["user.runner-controller-id"] != b.Controller || vm.Config["user.runner-pool-id"] != b.Pool {
 		return machine{}, errRefused
 	}
+	if err := machineAttachments(client, *vm); err != nil {
+		return machine{}, err
+	}
+	return runningMachine(client, b)
+}
+
+// Both capture and diagnosis reject unknown writable attachments, independently
+// of whether the original VM is still running. The managed bridge lookup is
+// observational and retains the controlled producer's device contract.
+func machineAttachments(client lxd.InstanceServer, vm api.Instance) error {
 	for _, key := range []string{"raw.qemu", "raw.qemu.conf", "raw.qemu.conf.path"} {
 		if vm.ExpandedConfig[key] != "" || vm.Config[key] != "" {
-			return machine{}, errRefused
+			return errRefused
 		}
 	}
 	// All expanded attachments are observed. Only the dedicated root disk and
@@ -101,29 +156,33 @@ func readMachine(client lxd.InstanceServer, b provider.ExecutionBinding) (machin
 			// The controlled producer uses network=nucleiron0 without nictype
 			// or parent; those properties conflict with managed network binding.
 			if d["network"] != "nucleiron0" || d["nictype"] != "" || d["parent"] != "" {
-				return machine{}, errRefused
+				return errRefused
 			}
 			network, _, err := client.GetNetwork("nucleiron0")
 			if err != nil || network == nil || network.Name != "nucleiron0" || network.Type != "bridge" || !network.Managed || network.Status != api.NetworkStatusCreated {
-				return machine{}, errRefused
+				return errRefused
 			}
 		case "disk":
 			if root || d["path"] != "/" || d["pool"] != "halo-ci" || d["source"] != "" || d["readonly"] != "" && d["readonly"] != "false" {
-				return machine{}, errRefused
+				return errRefused
 			}
 			for _, key := range []string{"source.snapshot", "source.type", "source.project", "raw.mount.options", "shift", "recursive"} {
 				if d[key] != "" {
-					return machine{}, errRefused
+					return errRefused
 				}
 			}
 			root = true
 		default:
-			return machine{}, errRefused
+			return errRefused
 		}
 	}
 	if !root {
-		return machine{}, errRefused
+		return errRefused
 	}
+	return nil
+}
+
+func runningMachine(client lxd.InstanceServer, b provider.ExecutionBinding) (machine, error) {
 	state, _, err := client.GetInstanceState(b.Name)
 	if err != nil || state == nil || state.Pid <= 0 || state.Pid > 2147483647 || state.StatusCode != api.Running || state.Status != "Running" {
 		return machine{}, errRefused

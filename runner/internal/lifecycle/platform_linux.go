@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	garm "github.com/cloudbase/garm/client"
@@ -55,6 +56,28 @@ func (t readTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	raw, err := io.ReadAll(io.LimitReader(response.Body, 2*1024*1024+1))
 	if err != nil || len(raw) > 2*1024*1024 || unambiguous(raw) != nil {
 		return nil, errRefused
+	}
+	// These SDK fields have non-pointer representations. Preserve their wire
+	// absence rules before decoding: GitHub total_count is required, whereas
+	// GARM v0.2.1 ScaleSet.Enabled uses omitempty for disabled ScaleSets.
+	if t.host == "api.github.com" && strings.HasSuffix(req.URL.Path, "/actions/runners") {
+		var wire struct {
+			Total *int `json:"total_count"`
+		}
+		if json.Unmarshal(raw, &wire) != nil || wire.Total == nil {
+			return nil, errRefused
+		}
+	}
+	if t.host == "127.0.0.1:9997" && strings.HasPrefix(req.URL.Path, "/api/v1/scalesets/") && strings.Count(strings.TrimPrefix(req.URL.Path, "/api/v1/scalesets/"), "/") == 0 {
+		var wire map[string]json.RawMessage
+		if json.Unmarshal(raw, &wire) != nil {
+			return nil, errRefused
+		}
+		for key, value := range wire {
+			if foldJSONName(key) == foldJSONName("enabled") && string(value) != "true" && string(value) != "false" {
+				return nil, errRefused
+			}
+		}
 	}
 	response.Body = io.NopCloser(bytes.NewReader(raw))
 	return response, nil

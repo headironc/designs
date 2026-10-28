@@ -224,5 +224,6 @@ func (h hostFiles) observe(pid int64, uuid string) (process, error) {
 }
 
 func (p process) valid() bool {
-	return uuidPattern.MatchString(p.BootID) && p.PID > 0 && p.PID <= 2147483647 && p.StartTime > 0 && p.Executable != "" && p.ExecutableInode > 0 && p.CgroupInode > 0 && p.Cgroup != "/" && strings.HasPrefix(p.Cgroup, "/")
+	group, err := groupPath([]byte("0::" + p.Cgroup))
+	return uuidPattern.MatchString(p.BootID) && p.PID > 0 && p.PID <= 2147483647 && p.StartTime > 0 && qemuPath.MatchString(p.Executable) && p.ExecutableInode > 0 && p.CgroupInode > 0 && err == nil && group == p.Cgroup
 }

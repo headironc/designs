@@ -270,6 +270,12 @@ func (c capture) execute(ctx context.Context, requestPath, operations string) (s
 // Run exposes a fixed production observation route. Test endpoints and fixture
 // roots are private implementation inputs, never flags or environment settings.
 func Run(ctx context.Context, args []string, output, diagnostic io.Writer) int {
+	if len(args) > 0 && args[0] == "diagnose-execution" {
+		return runDiagnostic(ctx, args[1:], output, diagnostic)
+	}
+	if len(args) > 0 && args[0] == "--database-observer" {
+		return databaseWorker(ctx, args[1:], os.Stdin, output)
+	}
 	stage := "arguments"
 	fail := func() int {
 		fmt.Fprintf(diagnostic, "{\"event\":\"execution_capture_refused\",\"stage\":%q}\n", stage)
