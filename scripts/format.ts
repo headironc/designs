@@ -6,8 +6,6 @@ import {
   constants,
   fstatSync,
   ftruncateSync,
-  lstatSync,
-  openSync,
   readFileSync,
   realpathSync,
   writeSync,
@@ -15,7 +13,12 @@ import {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as prettier from "prettier";
-import { listSourcePaths, readSourceEntries } from "./source.ts";
+import {
+  listSourcePaths,
+  openSourceRoot,
+  openSourceFile,
+  readSourceEntries,
+} from "./source.ts";
 
 const repository = path.resolve(import.meta.dirname, "..");
 const parsers: Record<string, string> = {
@@ -63,9 +66,18 @@ export function verifyGoFormat(goBin = process.env.DESIGNS_GO_BIN): string {
     ? realpathSync(path.join(goBin, "gofmt"))
     : executable("gofmt");
   const go = goBin ? path.join(goBin, "go") : executable("go");
-  const required = /^go (\S+)$/m.exec(
-    readFileSync(path.join(repository, "runner/go.mod"), "utf8"),
-  )?.[1];
+  const root = openSourceRoot(repository);
+  let required: string | undefined;
+  try {
+    const descriptor = openSourceFile(root, "runner/go.mod", false);
+    try {
+      required = /^go (\S+)$/m.exec(readFileSync(descriptor, "utf8"))?.[1];
+    } finally {
+      closeSync(descriptor);
+    }
+  } finally {
+    closeSync(root);
+  }
   if (!required) throw new Error("Missing Go version in runner/go.mod");
   const version = execFileSync(go, ["version", gofmt], {
     encoding: "utf8",
@@ -92,98 +104,132 @@ export async function formatFiles(
 ): Promise<string[]> {
   const selected = formatPaths(files);
   if (!selected.length) throw new Error("No supported source files selected");
-  const gofmt = selected.some((file) => file.endsWith(".go"))
-    ? verifyGoFormat(goBin)
-    : undefined;
-  // Only the repository root owns format settings; no parent config or EditorConfig lookup.
-  const options: prettier.Options = JSON.parse(
-    readFileSync(path.join(root, ".prettierrc.json"), "utf8"),
-  );
-  if (!options || typeof options !== "object" || Array.isArray(options))
-    throw new Error("Expected an object in .prettierrc.json");
-  const entries = readSourceEntries(root, selected);
-  const differences: string[] = [];
-  for (const entry of entries) {
-    const file = entry.path;
+  const sourceRoot = openSourceRoot(root);
+  try {
+    const gofmt = selected.some((file) => file.endsWith(".go"))
+      ? verifyGoFormat(goBin)
+      : undefined;
+    // Only the repository root owns format settings; no parent config or EditorConfig lookup.
+    const config = openSourceFile(sourceRoot, ".prettierrc.json", false);
+    let options: prettier.Options;
     try {
-      const target = path.join(root, file);
-      const descriptor = openSync(
-        target,
-        (write ? constants.O_RDWR : constants.O_RDONLY) | constants.O_NOFOLLOW,
+      options = JSON.parse(
+        new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+          readFileSync(config),
+        ),
       );
-      try {
-        const opened = fstatSync(descriptor, { bigint: true });
-        if (
-          !opened.isFile() ||
-          opened.ino !== entry.ino ||
-          opened.dev !== entry.dev ||
-          (write && opened.nlink !== 1n)
-        )
-          throw new Error(`Source changed or is linked: ${file}`);
-        const bytes = readFileSync(descriptor);
-        if (createHash("sha256").update(bytes).digest("hex") !== entry.sha256)
-          throw new Error(`Source changed before formatting: ${file}`);
-        const original = new TextDecoder("utf-8", {
-          fatal: true,
-          ignoreBOM: true,
-        }).decode(bytes);
-        const formatted = file.endsWith(".go")
-          ? execFileSync(gofmt!, [], {
-              input: original,
-              encoding: "utf8",
-              timeout: 30_000,
-              maxBuffer: 16 * 1024 * 1024,
-              env: { PATH: "/usr/bin:/bin" },
-              stdio: ["pipe", "pipe", "pipe"],
-            })
-          : await prettier.format(original, {
-              ...options,
-              parser: parsers[path.extname(file)]!,
-              filepath: target,
-            });
-        if (original !== formatted) {
-          differences.push(file);
-          if (write) {
-            const current = fstatSync(descriptor, { bigint: true });
-            const named = lstatSync(target, { bigint: true });
-            if (
-              named.isSymbolicLink() ||
-              named.ino !== opened.ino ||
-              named.dev !== opened.dev ||
-              current.nlink !== 1n ||
-              current.size !== opened.size ||
-              current.mtimeNs !== opened.mtimeNs ||
-              current.ctimeNs !== opened.ctimeNs
-            )
-              throw new Error(`Source changed during formatting: ${file}`);
-            // Keep the validated inode open across async formatting; never reopen its name.
-            const output = Buffer.from(formatted);
-            let offset = 0;
-            while (offset < output.length) {
-              const written = writeSync(
-                descriptor,
-                output,
-                offset,
-                output.length - offset,
-                offset,
-              );
-              if (!written) throw new Error(`Incomplete format write: ${file}`);
-              offset += written;
-            }
-            ftruncateSync(descriptor, output.length);
-          }
-        }
-      } finally {
-        closeSync(descriptor);
-      }
-    } catch (error) {
-      throw new Error(
-        `${file}: ${error instanceof Error ? error.message : String(error)}`,
-        { cause: error },
-      );
+    } finally {
+      closeSync(config);
     }
+    if (!options || typeof options !== "object" || Array.isArray(options))
+      throw new Error("Expected an object in .prettierrc.json");
+    const entries = readSourceEntries(sourceRoot, selected);
+    const differences: string[] = [];
+    for (const entry of entries) {
+      const file = entry.path;
+      try {
+        const target = path.join(root, file);
+        const descriptor = openSourceFile(sourceRoot, file, write);
+        try {
+          const opened = fstatSync(descriptor, { bigint: true });
+          if (
+            !opened.isFile() ||
+            opened.ino !== entry.ino ||
+            opened.dev !== entry.dev ||
+            (write && opened.nlink !== 1n)
+          )
+            throw new Error(`Source changed or is linked: ${file}`);
+          const bytes = readFileSync(descriptor);
+          if (createHash("sha256").update(bytes).digest("hex") !== entry.sha256)
+            throw new Error(`Source changed before formatting: ${file}`);
+          const original = new TextDecoder("utf-8", {
+            fatal: true,
+            ignoreBOM: true,
+          }).decode(bytes);
+          const formatted = file.endsWith(".go")
+            ? execFileSync(gofmt!, [], {
+                input: original,
+                encoding: "utf8",
+                timeout: 30_000,
+                maxBuffer: 16 * 1024 * 1024,
+                env: { PATH: "/usr/bin:/bin" },
+                stdio: ["pipe", "pipe", "pipe"],
+              })
+            : await prettier.format(original, {
+                ...options,
+                parser: parsers[path.extname(file)]!,
+                filepath: target,
+              });
+          if (original !== formatted) {
+            differences.push(file);
+            if (write) {
+              let named;
+              try {
+                const currentRoot = openSourceRoot(root);
+                try {
+                  const originalRoot = fstatSync(sourceRoot, { bigint: true });
+                  const namedRoot = fstatSync(currentRoot, { bigint: true });
+                  if (
+                    originalRoot.ino !== namedRoot.ino ||
+                    originalRoot.dev !== namedRoot.dev
+                  )
+                    throw new Error("Source root changed");
+                  const currentFile = openSourceFile(currentRoot, file, false);
+                  try {
+                    named = fstatSync(currentFile, { bigint: true });
+                  } finally {
+                    closeSync(currentFile);
+                  }
+                } finally {
+                  closeSync(currentRoot);
+                }
+              } catch (error) {
+                throw new Error(`Source changed during formatting: ${file}`, {
+                  cause: error,
+                });
+              }
+              const current = fstatSync(descriptor, { bigint: true });
+              if (
+                named.ino !== opened.ino ||
+                named.dev !== opened.dev ||
+                current.nlink !== 1n ||
+                current.size !== opened.size ||
+                current.mtimeNs !== opened.mtimeNs ||
+                current.ctimeNs !== opened.ctimeNs
+              )
+                throw new Error(`Source changed during formatting: ${file}`);
+              // Write only through the descriptor held across async formatting.
+              const output = Buffer.from(formatted);
+              let offset = 0;
+              while (offset < output.length) {
+                const written = writeSync(
+                  descriptor,
+                  output,
+                  offset,
+                  output.length - offset,
+                  offset,
+                );
+                if (!written)
+                  throw new Error(`Incomplete format write: ${file}`);
+                offset += written;
+              }
+              ftruncateSync(descriptor, output.length);
+            }
+          }
+        } finally {
+          closeSync(descriptor);
+        }
+      } catch (error) {
+        throw new Error(
+          `${file}: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        );
+      }
+    }
+    return differences;
+  } finally {
+    closeSync(sourceRoot);
   }
-  return differences;
 }
 
 if (

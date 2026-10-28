@@ -8,6 +8,7 @@ import {
   openSync,
   readFileSync,
   realpathSync,
+  statSync,
 } from "node:fs";
 import path from "node:path";
 
@@ -68,15 +69,105 @@ export function listSourcePaths(root: string): string[] {
       lstatSync(path.join(root, file));
       return true;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      if (
+        ["ENOENT", "ENOTDIR"].includes(
+          (error as NodeJS.ErrnoException).code ?? "",
+        )
+      )
+        return false;
       throw error;
     }
   });
 }
 
-/** Snapshot regular source files before formatting, without following links. */
-export function readSourceEntries(root: string, files: string[]) {
-  const physicalRoot = realpathSync(root);
+const directoryFlags =
+  constants.O_RDONLY |
+  constants.O_DIRECTORY |
+  constants.O_NOFOLLOW |
+  constants.O_NONBLOCK;
+
+/** Bind the root from /, refusing symlinks in every component of its absolute path. */
+export function openSourceRoot(root: string): number {
+  if (process.platform !== "linux")
+    throw new Error("Formatting requires Linux with /proc/self/fd");
+  const absolute = path.resolve(root);
+  const expected = lstatSync(absolute, { bigint: true });
+  if (!expected.isDirectory())
+    throw new Error(`Source root must be a real directory: ${absolute}`);
+  let directory = openSync("/", directoryFlags);
+  try {
+    for (const part of absolute.split("/").filter(Boolean)) {
+      const child = openSync(
+        `/proc/self/fd/${directory}/${part}`,
+        directoryFlags,
+      );
+      closeSync(directory);
+      directory = child;
+    }
+    const opened = fstatSync(directory, { bigint: true });
+    const viaProc = statSync(`/proc/self/fd/${directory}`, { bigint: true });
+    if (
+      opened.ino !== expected.ino ||
+      opened.dev !== expected.dev ||
+      viaProc.ino !== opened.ino ||
+      viaProc.dev !== opened.dev
+    )
+      throw new Error(`Source root changed while opening: ${absolute}`);
+    return directory;
+  } catch (error) {
+    closeSync(directory);
+    throw new Error(
+      `Cannot bind source root; Linux /proc/self/fd is required: ${absolute}`,
+      { cause: error },
+    );
+  }
+}
+
+/** Each open resolves one name beneath an already held directory, never its ancestors. */
+export function openSourceFile(
+  root: number,
+  file: string,
+  write: boolean,
+): number {
+  validatePath(file);
+  const parts = file.split("/");
+  const directories: number[] = [];
+  let parent = root;
+  try {
+    for (const part of parts.slice(0, -1)) {
+      parent = openSync(`/proc/self/fd/${parent}/${part}`, directoryFlags);
+      directories.push(parent);
+    }
+    const target = `/proc/self/fd/${parent}/${parts.at(-1)!}`;
+    const expected = lstatSync(target, { bigint: true });
+    if (!expected.isFile())
+      throw new Error(`Source must be a regular file: ${file}`);
+    const descriptor = openSync(
+      target,
+      (write ? constants.O_RDWR : constants.O_RDONLY) |
+        constants.O_NOFOLLOW |
+        constants.O_NONBLOCK,
+    );
+    try {
+      const opened = fstatSync(descriptor, { bigint: true });
+      if (
+        !opened.isFile() ||
+        opened.ino !== expected.ino ||
+        opened.dev !== expected.dev
+      )
+        throw new Error(`Source changed while opening: ${file}`);
+      return descriptor;
+    } catch (error) {
+      closeSync(descriptor);
+      throw error;
+    }
+  } finally {
+    for (const directory of directories.reverse()) closeSync(directory);
+  }
+}
+
+/** Snapshot regular source files before formatting, keeping their root directory bound. */
+export function readSourceEntries(root: number, files: string[]) {
   if (!files.length || new Set(files).size !== files.length)
     throw new Error("Empty or duplicate source paths");
   return [...files]
@@ -84,28 +175,9 @@ export function readSourceEntries(root: string, files: string[]) {
       Buffer.compare(Buffer.from(left), Buffer.from(right)),
     )
     .map((file) => {
-      validatePath(file);
-      let current = physicalRoot;
-      for (const part of file.split("/")) {
-        current = path.join(current, part);
-        if (lstatSync(current).isSymbolicLink())
-          throw new Error(`Source symlink rejected: ${file}`);
-      }
-      const expected = lstatSync(current, { bigint: true });
-      if (!expected.isFile())
-        throw new Error(`Source must be a regular file: ${file}`);
-      const descriptor = openSync(
-        current,
-        constants.O_RDONLY | constants.O_NOFOLLOW,
-      );
+      const descriptor = openSourceFile(root, file, false);
       try {
         const opened = fstatSync(descriptor, { bigint: true });
-        if (
-          !opened.isFile() ||
-          opened.ino !== expected.ino ||
-          opened.dev !== expected.dev
-        )
-          throw new Error(`Source changed while opening: ${file}`);
         const bytes = readFileSync(descriptor);
         const after = fstatSync(descriptor, { bigint: true });
         if (

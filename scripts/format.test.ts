@@ -15,6 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { formatFiles, verifyGoFormat } from "./format.ts";
+import { listSourcePaths } from "./source.ts";
 
 const repository = path.resolve(import.meta.dirname, "..");
 
@@ -277,4 +278,148 @@ test("CLI covers new files, excludes deletions and ignored outputs, and needs no
     readFileSync(path.join(root, ".build/output.go"), "utf8"),
     "invalid = ;\n",
   );
+});
+
+test("source enumeration excludes deleted children whose ancestor became a file", (t) => {
+  const root = fixture(t);
+  execFileSync("git", ["init", "--quiet", root]);
+  mkdirSync(path.join(root, "old"));
+  writeFileSync(path.join(root, "old/deleted.ts"), "const x = 1;\n");
+  execFileSync("git", ["-C", root, "add", "old/deleted.ts"]);
+  rmSync(path.join(root, "old"), { recursive: true });
+  writeFileSync(path.join(root, "old"), "replacement\n");
+  assert.ok(!listSourcePaths(root).includes("old/deleted.ts"));
+});
+
+function runRace(t: TestContext, scenario: string): void {
+  const root = fixture(t);
+  const script = `
+    import assert from "node:assert/strict";
+    import { execFileSync } from "node:child_process";
+    import fs from "node:fs";
+    import { syncBuiltinESMExports } from "node:module";
+    import path from "node:path";
+    import { formatFiles } from ${JSON.stringify(path.join(import.meta.dirname, "format.ts"))};
+    const [base, scenario] = process.argv.slice(1);
+    const root = path.join(base, "container/source");
+    const outside = path.join(base, "outside/source");
+    fs.mkdirSync(path.join(root, "nested"), { recursive: true });
+    fs.mkdirSync(path.join(outside, "nested"), { recursive: true });
+    fs.copyFileSync(path.join(base, ".prettierrc.json"), path.join(root, ".prettierrc.json"));
+    const original = "const inside={x:1}\\n";
+    const external = "const outside={y:2}\\n";
+    const target = path.join(root, "nested/file.ts");
+    const outsideFile = path.join(outside, "nested/file.ts");
+    fs.writeFileSync(target, original);
+    fs.writeFileSync(outsideFile, external);
+    const saved = path.join(base, "saved");
+    let injected = false;
+    let leafOpens = 0;
+    const descriptorsBefore = fs.readdirSync("/proc/self/fd").length;
+    const realOpen = fs.openSync;
+    const realLstat = fs.lstatSync;
+    const parentSwap = () => {
+      fs.renameSync(path.join(root, "nested"), saved);
+      fs.symlinkSync(path.join(outside, "nested"), path.join(root, "nested"));
+    };
+    fs.lstatSync = function(file, ...args) {
+      const result = realLstat.call(this, file, ...args);
+      if (!injected && scenario === "snapshot-parent" && path.basename(String(file)) === "file.ts") {
+        injected = true;
+        parentSwap();
+      }
+      if (!injected && scenario === "initial-root" && String(file) === root) {
+        injected = true;
+        fs.renameSync(root, saved);
+        fs.symlinkSync(outside, root);
+      }
+      if (!injected && scenario === "initial-root-ancestor" && String(file) === root) {
+        injected = true;
+        fs.renameSync(path.dirname(root), saved);
+        fs.symlinkSync(path.dirname(outside), path.dirname(root));
+      }
+      return result;
+    };
+    fs.openSync = function(file, ...args) {
+      if (scenario === "missing-proc" && String(file).startsWith("/proc/self/fd/")) {
+        injected = true;
+        throw Object.assign(new Error("Proc unavailable"), { code: "EACCES" });
+      }
+      if (path.basename(String(file)) === "file.ts") {
+        leafOpens++;
+        const phase = Number(scenario.split(":")[1]);
+        if (!injected && scenario.startsWith("fifo:") && leafOpens === phase) {
+          injected = true;
+          fs.renameSync(target, path.join(base, "saved.ts"));
+          execFileSync("mkfifo", [target]);
+        }
+        if (!injected && scenario === "reopen-parent" && leafOpens === 2) {
+          injected = true;
+          parentSwap();
+        }
+      }
+      return realOpen.call(this, file, ...args);
+    };
+    syncBuiltinESMExports();
+    let failed = false;
+    try { await formatFiles(root, ["nested/file.ts"], !scenario.endsWith(":check")); }
+    catch { failed = true; }
+    assert.ok(injected, "The real filesystem replacement must run");
+    assert.equal(fs.readFileSync(outsideFile, "utf8"), external, "Outside bytes must remain unchanged");
+    if (scenario.startsWith("fifo:")) {
+      assert.ok(failed, "FIFO replacement must fail");
+      assert.equal(fs.readFileSync(path.join(base, "saved.ts"), "utf8"), original);
+    } else if (scenario === "snapshot-parent") {
+      assert.ok(failed, "The next traversal must reject the replaced parent");
+      assert.equal(fs.readFileSync(path.join(saved, "file.ts"), "utf8"), original);
+    } else if (scenario === "initial-root") {
+      assert.ok(failed, "Root symlink substitution must fail");
+      assert.equal(fs.readFileSync(path.join(saved, "nested/file.ts"), "utf8"), original);
+    } else if (scenario === "initial-root-ancestor") {
+      assert.ok(failed, "Root ancestor symlink substitution must fail");
+      assert.equal(fs.readFileSync(path.join(saved, "source/nested/file.ts"), "utf8"), original);
+    } else if (scenario === "missing-proc") {
+      assert.ok(failed, "Missing proc access must fail without fallback");
+      assert.equal(fs.readFileSync(target, "utf8"), original);
+      assert.equal(fs.readdirSync("/proc/self/fd").length, descriptorsBefore, "Root descriptor must be closed on failure");
+    } else {
+      assert.ok(failed, "Write preparation must reject the replaced parent");
+      assert.equal(fs.readFileSync(path.join(saved, "file.ts"), "utf8"), original);
+    }
+  `;
+  const result = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", script, root, scenario],
+    {
+      encoding: "utf8",
+      timeout: 5_000,
+    },
+  );
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr);
+}
+
+test("initial snapshots cannot adopt an outside inode after a parent swap", (t) => {
+  runRace(t, "snapshot-parent");
+});
+
+test("initial root substitution and later parent substitution fail without outside writes", (t) => {
+  runRace(t, "initial-root");
+  runRace(t, "initial-root-ancestor");
+  runRace(t, "reopen-parent");
+});
+
+test("unavailable proc access fails without fallback or leaked directory descriptors", (t) => {
+  runRace(t, "missing-proc");
+});
+
+test("FIFO substitution during snapshot, reopening and write preparation never blocks", (t) => {
+  for (const scenario of [
+    "fifo:1:check",
+    "fifo:1:write",
+    "fifo:2:check",
+    "fifo:2:write",
+    "fifo:3:write",
+  ])
+    runRace(t, scenario);
 });
