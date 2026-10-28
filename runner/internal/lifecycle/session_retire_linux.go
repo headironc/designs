@@ -29,6 +29,13 @@ type sessionRejection struct {
 	Observed  int64  `json:"observed_at"`
 }
 
+// Keep the received body and its verified source/time judgment in one write.
+// A retained response can finish local sealing without contacting the service.
+type sessionRejectionResponse struct {
+	Rejection sessionRejection `json:"rejection"`
+	Body      []byte           `json:"body"`
+}
+
 type sessionRetirementCleanup struct {
 	RejectionSHA string `json:"rejection_sha256"`
 	TokenRemoved bool   `json:"consumer_token_removed"`
@@ -44,11 +51,9 @@ type sessionRetirer struct {
 	check func(context.Context, sessionPlan, sessionIntent, sessionWindowReady) error
 }
 
-// retirementRejection only reconstructs a retained rejection judgment. It
-// neither contacts a server nor interprets file absence as token revocation.
-func (a sessionAcquirer) retirementRejection(s *serviceFiles, seal sessionSeal) (sessionRetirement, error) {
+func (a sessionAcquirer) retirementIntent(s *serviceFiles, seal sessionSeal) (sessionRetirement, error) {
 	var intent sessionRetirement
-	i, err := a.read(s, "retirement.intent.json", &intent)
+	_, err := a.read(s, "retirement.intent.json", &intent)
 	if err != nil || intent.Version != 1 || intent.RequestSHA != bytesSHA(s.raw["request.json"]) || intent.CompleteSHA != bytesSHA(s.raw["complete.json"]) || !digestPattern.MatchString(intent.IssuerSHA) || !digestPattern.MatchString(intent.ProducerSHA) || intent.Expires != seal.Expires || intent.Started < seal.Expires || intent.TokenDevice == 0 || intent.TokenInode == 0 {
 		return intent, errRefused
 	}
@@ -56,19 +61,39 @@ func (a sessionAcquirer) retirementRejection(s *serviceFiles, seal sessionSeal) 
 	if strictObject(s.raw["intent.json"], &issued) != nil || issued.ProducerSHA != intent.IssuerSHA {
 		return intent, errRefused
 	}
+	return intent, nil
+}
+
+// retirementRejection only reconstructs a retained rejection judgment. It
+// neither contacts a server nor interprets file absence as token revocation.
+func (a sessionAcquirer) retirementRejection(s *serviceFiles, seal sessionSeal) (sessionRetirement, error) {
+	intent, err := a.retirementIntent(s, seal)
+	if err != nil {
+		return intent, err
+	}
 	var rejection sessionRejection
-	if _, err := a.read(s, "retired.json", &rejection); err != nil || rejection.IntentSHA != bytesSHA(i) || rejection.Status != 401 || rejection.Observed < intent.Started {
+	if _, err := a.read(s, "retired.json", &rejection); err != nil {
 		return intent, errRefused
 	}
-	body, err := a.read(s, "retirement.rejection.body", nil)
+	response, err := a.retirementResponse(s, intent)
+	if err != nil || rejection != response.Rejection {
+		return intent, errRefused
+	}
+	return intent, nil
+}
+
+func (a sessionAcquirer) retirementResponse(s *serviceFiles, intent sessionRetirement) (sessionRejectionResponse, error) {
+	var response sessionRejectionResponse
+	_, err := a.read(s, "retirement.response.json", &response)
+	rejection := response.Rejection
 	var wire struct {
 		Error   *string `json:"error"`
 		Details *string `json:"details"`
 	}
-	if err != nil || bytesSHA(body) != rejection.BodySHA || strictObject(body, &wire) != nil || wire.Error == nil || *wire.Error != "Authentication failed" || wire.Details == nil || *wire.Details != "" || s.files.syncFile(s.dir) != nil || s.files.syncFile(s.parent) != nil || !s.unchanged() {
-		return intent, errRefused
+	if err != nil || rejection.IntentSHA != bytesSHA(s.raw["retirement.intent.json"]) || rejection.Status != 401 || rejection.Observed < intent.Started || bytesSHA(response.Body) != rejection.BodySHA || strictObject(response.Body, &wire) != nil || wire.Error == nil || *wire.Error != "Authentication failed" || wire.Details == nil || *wire.Details != "" || s.files.syncFile(s.dir) != nil || s.files.syncFile(s.parent) != nil || !s.unchanged() {
+		return response, errRefused
 	}
-	return intent, nil
+	return response, nil
 }
 
 func (r sessionRetirer) execute(ctx context.Context, request []byte) (sessionOutcome, error) {
@@ -100,7 +125,7 @@ func (r sessionRetirer) execute(ctx context.Context, request []byte) (sessionOut
 		return out, errRefused
 	}
 	var intent sessionRetirement
-	if a.absent(s, "retired.json") {
+	if a.absent(s, "retired.json") && a.absent(s, "retirement.response.json") {
 		if ctx.Err() != nil || r.now().Unix() < seal.Expires || r.check == nil {
 			return out, errRefused
 		}
@@ -126,7 +151,8 @@ func (r sessionRetirer) execute(ctx context.Context, request []byte) (sessionOut
 				return out, errRefused
 			}
 		}
-		if _, err := a.read(s, "retirement.intent.json", &intent); err != nil || intent.Version != 1 || intent.TokenDevice == 0 || intent.TokenInode == 0 || intent.RequestSHA != bytesSHA(request) || intent.CompleteSHA != bytesSHA(s.raw["complete.json"]) || intent.IssuerSHA != r.issuer || intent.ProducerSHA != r.producer || intent.Expires != seal.Expires || intent.Started < seal.Expires || r.check(ctx, p, issued, ready) != nil {
+		intent, err = a.retirementIntent(s, seal)
+		if err != nil || intent.IssuerSHA != r.issuer || intent.ProducerSHA != r.producer || r.check(ctx, p, issued, ready) != nil {
 			return out, errRefused
 		}
 		var body struct {
@@ -137,20 +163,27 @@ func (r sessionRetirer) execute(ctx context.Context, request []byte) (sessionOut
 		}
 		client := newBoundSessionClient(nil, r.fixture, func(c context.Context) error { return r.check(c, p, issued, ready) })
 		err = client.rejection(ctx, body.Token, func(raw []byte) error {
-			if !a.absent(s, "retirement.rejection.body") {
-				old, err := a.read(s, "retirement.rejection.body", nil)
-				if err != nil || !bytes.Equal(old, raw) {
-					return errRefused
-				}
-				return nil
+			observed := r.now().Unix()
+			if observed < intent.Started || r.check(ctx, p, issued, ready) != nil || ctx.Err() != nil || r.now().Unix() < observed || !s.unchanged() {
+				return errRefused
 			}
-			return (sessionInstaller{store: s}).raw("retirement.rejection.body", raw)
+			return s.create("retirement.response.json", sessionRejectionResponse{
+				Rejection: sessionRejection{bytesSHA(s.raw["retirement.intent.json"]), bytesSHA(raw), 401, observed},
+				Body:      raw,
+			})
 		})
 		client.close()
-		if err != nil || ctx.Err() != nil || r.now().Unix() < seal.Expires || r.check(ctx, p, issued, ready) != nil || !s.unchanged() {
+		if err != nil {
 			return out, errRefused
 		}
-		if s.create("retired.json", sessionRejection{bytesSHA(s.raw["retirement.intent.json"]), bytesSHA(s.raw["retirement.rejection.body"]), 401, r.now().Unix()}) != nil {
+	}
+	if a.absent(s, "retired.json") {
+		intent, err = a.retirementIntent(s, seal)
+		if err != nil || intent.IssuerSHA != r.issuer || intent.ProducerSHA != r.producer {
+			return out, errRefused
+		}
+		response, err := a.retirementResponse(s, intent)
+		if err != nil || s.create("retired.json", response.Rejection) != nil {
 			return out, errRefused
 		}
 	}

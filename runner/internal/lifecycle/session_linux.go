@@ -119,7 +119,7 @@ func (a sessionAcquirer) execute(ctx context.Context, request []byte) (sessionOu
 	if err != nil || !digestPattern.MatchString(a.producer) || a.now == nil || a.admit == nil {
 		return out, errRefused
 	}
-	s, err := openServiceFiles(a.files, a.parent, "session", "session.lock", true)
+	s, err := openServiceFiles(a.files, a.parent, "session", "session.lock", true, "window")
 	if err != nil {
 		return out, err
 	}

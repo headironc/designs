@@ -99,7 +99,7 @@ func openPauseStore(files protectedFiles, parent string, createLock bool) (*paus
 	return &pauseStore{s}, nil
 }
 
-func openServiceFiles(files protectedFiles, parent, slotName, lockName string, createLock bool) (*serviceFiles, error) {
+func openServiceFiles(files protectedFiles, parent, slotName, lockName string, createLock bool, relatedSlots ...string) (*serviceFiles, error) {
 	if files.parents(filepath.Join(parent, "unused")) != nil {
 		return nil, errRefused
 	}
@@ -113,14 +113,15 @@ func openServiceFiles(files protectedFiles, parent, slotName, lockName string, c
 		return fail()
 	}
 	flags, mode := unix.O_RDONLY, uint32(0)
-	var slot unix.Stat_t
-	statErr := unix.Fstatat(int(dir.Fd()), slotName, &slot, unix.AT_SYMLINK_NOFOLLOW)
-	if statErr != nil && !errors.Is(statErr, unix.ENOENT) {
-		return fail()
-	}
-	occupied := statErr == nil
-	if createLock && occupied {
-		createLock = false
+	for _, name := range append([]string{slotName}, relatedSlots...) {
+		var slot unix.Stat_t
+		statErr := unix.Fstatat(int(dir.Fd()), name, &slot, unix.AT_SYMLINK_NOFOLLOW)
+		if statErr != nil && !errors.Is(statErr, unix.ENOENT) {
+			return fail()
+		}
+		if statErr == nil {
+			createLock = false
+		}
 	}
 	if createLock {
 		flags = unix.O_RDWR | unix.O_CREAT | unix.O_EXCL

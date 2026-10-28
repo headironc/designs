@@ -149,6 +149,38 @@ func TestSessionRetirementRequiresExpiryTargetAndActualUnauthorizedResponse(t *t
 	}
 }
 
+func TestSessionRetirementRecoversRetainedResponseWithoutLiveTarget(t *testing.T) {
+	r, a, request, calls := sessionRetirementFixture(t, 401, sessionDeniedBody)
+	failed := false
+	r.files.syncHook = func(f *os.File) error {
+		if failed || f.Name() != filepath.Join(a.parent, "session") {
+			return nil
+		}
+		_, sealErr := os.Stat(filepath.Join(f.Name(), "retired.json"))
+		if calls.Load() == 1 && os.IsNotExist(sealErr) {
+			failed = true
+			return errors.New("fixture lost response synchronization")
+		}
+		return nil
+	}
+	if _, err := r.execute(context.Background(), request); err == nil || !failed || calls.Load() != 1 {
+		t.Fatal("fixture did not interrupt after the rejection response")
+	}
+	r.files.syncHook = nil
+	r.now = func() time.Time { return time.Unix(1863217000, 0) }
+	r.check = func(context.Context, sessionPlan, sessionIntent, sessionWindowReady) error {
+		return errRefused
+	}
+	if _, err := r.execute(context.Background(), request); err != nil || calls.Load() != 1 {
+		t.Fatalf("retained rejection could not recover without its controller: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(a.parent, "session", "retired.json"))
+	var rejection sessionRejection
+	if err != nil || strictObject(raw, &rejection) != nil || rejection.Observed != 1863216000 {
+		t.Fatal("recovery replaced the original rejection observation time")
+	}
+}
+
 func TestSessionRetirementRecoversLostLocalReceiptsWithoutAnotherGET(t *testing.T) {
 	for _, phase := range []string{"rejection_seal", "token_unlink", "cleanup_seal"} {
 		t.Run(phase, func(t *testing.T) {

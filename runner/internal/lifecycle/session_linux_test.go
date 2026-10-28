@@ -89,6 +89,30 @@ func sessionAcquisitionFixture(t *testing.T) (sessionAcquirer, []byte, *sessionA
 	return a, raw, admission, posts
 }
 
+func TestSessionAcquisitionPreservesLockIdentityForExistingWindow(t *testing.T) {
+	a, request, _, posts := sessionAcquisitionFixture(t)
+	original, err := openServiceFiles(a.files, a.parent, "session", "session.lock", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer original.close()
+	lock := filepath.Join(a.parent, "session.lock")
+	if err := os.Remove(lock); err != nil {
+		t.Fatal(err)
+	}
+	admitted := false
+	a.admit = func(context.Context, sessionPlan, []byte, *serviceFiles, func(sessionAdmission) error) error {
+		admitted = true
+		return errRefused
+	}
+	if _, err := a.execute(context.Background(), request); err == nil || admitted || *posts != 0 {
+		t.Fatal("existing window with a missing permanent lock reached admission")
+	}
+	if _, err := os.Lstat(lock); !os.IsNotExist(err) {
+		t.Fatal("existing window caused a replacement lock to be created")
+	}
+}
+
 func TestSessionAcquisitionPublishesCompatibleTokenAndRecoversOriginal(t *testing.T) {
 	a, raw, admission, posts := sessionAcquisitionFixture(t)
 	out, err := a.execute(context.Background(), raw)

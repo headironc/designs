@@ -89,13 +89,15 @@ gateway 须已停止、无 job 且原 cgroup 为空。本入口只观察 gateway
 
 固定父目录 `/var/lib/nucleus-halo-credentials` 预先配置为 root `0700`。`session.lock` 为全局永久锁；`window/` 保存配置、探针和服务原件，`session/` 保存准确请求、登录意图、原响应、验证封印和派生 `garm-token`。文件为 root `0600`、单链接。配置及响应仍含秘密，必须持续留在私有位置，不进入 Git、PR 或公共日志。
 
+`window/` 或 `session/` 任一存在时，都必须取得既有 `session.lock`。锁丢失时拒绝，不为部分窗口重建锁身份。
+
 先保存 verified 封印，再发布 token，最后保存 complete 封印。已有完整原件时，发行入口只读回同一结果；部分槽位不触发第二次 Login。换 operation、请求或目录不会获得重发资格。输出失败不证明发行失败，沿同一请求回读。
 
 ## 消费与到期退役
 
 [采集](execution.md)、[暂停](pause.md)、[停止 gateway](gateway.md)、[诊断](closure.md)支持固定受管文件 `/var/lib/nucleus-halo-credentials/session/garm-token`。`--garm-session-sha256` 绑定原发行成品。受管消费核原 window、请求、响应和 complete 封印，并核 controller 和期限。既有外部 raw token 合同继续保留。受管路径缺少 producer 时拒绝。
 
-消费者持有共享 session 租约至 API 使用结束。退役取得独占租约，先核 token 到期及原服务来源，再保存实际规范 401 正文和 retired 封印，最后删除原 inode 的派生 token。已有退役意图立即阻挡新消费者，时钟回退也不重新开放。替换文件不被删除。
+消费者持有共享 session 租约至 API 使用结束。退役取得独占租约，先核 token 到期及原服务来源。`retirement.response.json` 在同一次持久化中保存实际规范 401 正文、原意图摘要和原观察时间，再据此生成 retired 封印，最后删除原 inode 的派生 token。已有退役意图立即阻挡新消费者，时钟回退也不重新开放。替换文件不被删除。
 
 本地同步回执丢失时，只恢复原封印和删除，不重复已保留的拒绝 GET，不重新登录。原请求、原响应和判断原件继续保留。成功状态 `expiry_rejection_observed_token_removed` 只证明观察到到期后拒绝及派生副本移除，不代表即时撤销、历史 unknown 已闭合或所有秘密原件已销毁。
 
