@@ -70,11 +70,42 @@ lychee 在独立控制目录运行，并使用显式空配置。固定参数强�
 
 成功退出 0；内部断链退出 1，并报告仓库路径、可用的行号、目标及原因。缺工具、摘要或版本错误、输入遗漏、解析诊断、并发修改等检查错误退出 2。检查不会联网补装或自动修复文档。先按原错误修复路径、目标或环境，再运行同一入口；工具损坏时重新运行 `links:prepare`。网络或校验失败时保留错误，核对官方发布材料后再准备，不改用宿主任意版本。升级通过普通 PR 同时更新唯一工具声明和说明，重新执行准备、`test:links`、`links:check`、类型及格式检查。回退源码后，按回退版本重新准备工具并检查。
 
+## Go 依赖漏洞检查
+
+漏洞检查与完整 Go 测试分别运行。[原生 Go 工作流](.github/workflows/go.yml)中的 `vulnerabilities` job 使用 `ubuntu-latest`，与本地执行同一命令。漏洞扫描不需要 Docker、nft、私有 user/network namespace 或 runner 服务，因此无需沿用测试 job 的 Ubuntu 22.04 限制。环境为 Linux amd64、可用的 `/proc/self/fd`、Node/Bun 和完整 Go 1.27.3 SDK。SDK 可通过当前 `PATH` 或 `DESIGNS_GO_BIN` 指定，工具会核对版本。首次运行先显式准备：
+
+```sh
+bun install --frozen-lockfile --ignore-scripts
+bun run go:vuln:prepare
+bun run test:go-vuln
+bun run go:vuln:check
+```
+
+[Dependabot 告警](https://docs.github.com/en/code-security/concepts/supply-chain-security/dependabot-alerts)检查默认分支的依赖图，依据 GitHub Advisory Database 生成告警。查看本仓库的 [Security → Dependabot](https://github.com/headironc/designs/security/dependabot)。告警由仓库平台设置启用，本工作流不会自动开启该设置，也不会自动启用依赖升级 PR。本地和 PR 中保留 [govulncheck 调用图检查](https://go.dev/doc/security/vuln/)，用于分析当前候选的 Go 函数可达性。两者范围不同，任何一项无告警都不保证所有依赖安全。
+
+`go:vuln:prepare` 通过 `proxy.golang.org` 与 `sum.golang.org` 构建固定的 `govulncheck v1.9.0`，并下载 runner 锁定模块。构建使用 Go 1.27.3、Linux amd64、`GOAMD64=v1`、`CGO_ENABLED=0`、`-trimpath` 和 `-buildvcs=false`。唯一工具声明位于 [go-vuln.ts](scripts/go-vuln.ts)，包含固定二进制 SHA-256；版本输出不能替代字节校验。下载、构建、校验和收尾成功后才原子替换工具，准备失败保留旧安装和本次日志。准备不会下载 SDK、拉取镜像或修改用户配置，也不代表扫描通过。
+
+检查先验证工具字节与构建身份，再执行私有副本。源码来自 Git 已跟踪文件及未忽略的新文件中的 `runner/`，排除工作树删除项；忽略文件不能补入源码。协议解码 helper 和五项处置记录也纳入同一输入绑定。路径与文件拒绝符号链接和特殊文件，副本、原源码及模块锁均核对前后内容。当前入口拒绝模块 replace 指令，避免从副本之外补入源码。并发修改或清理失败属于操作失败。Go 使用 `GOENV=off`、`GOWORK=off`、`GOTOOLCHAIN=local`、`GOFLAGS=-mod=readonly`；检查关闭模块代理与校验数据库，不自动补装依赖。环境按允许列表构造，外部代理、令牌、Go 设置及 runner 夹具变量不会传入工具。
+
+扫描前执行离线 `go mod verify`，核对已准备模块缓存的完整性。缓存损坏属于操作失败，先保留日志，再重新准备对应缓存。
+
+原生命令固定为 `govulncheck -db=https://vuln.go.dev -scan=symbol -test -tags=integration -format=json ./...`。它分析 Linux amd64、启用 cgo 的源码导入图，包含测试及 integration 标签，但不运行测试、runner 服务或 nft。范围包含该图使用的模块和标准库，不等于 `go list -m all` 的完整模块列表，也不涵盖其他平台或未选 build tags。报告保留可达函数、已导入包和仅模块层面的发现，不能把“无可达发现”解释为“所有依赖无漏洞”。工具的 module 模式要求当前目录有 Go 文件且不接受包 pattern，因此本入口不使用该模式。
+
+扫描正常结束并收齐 stdout 后，标准库 helper 解码协议，核验 config、SBOM 和 finding 关联。随后将同一未修改 JSON 交给 `govulncheck -mode=convert -format=text -show=version,verbose`，保留原生文本退出 0 或 3，并核对可达发现是否一致。转换使用本地元数据，不再次在线扫描或查询数据库。文本先显示转换器配置，再显示原件中的扫描配置；后者才是本次扫描来源。空输入或 JSON 原生退出 0 均不能证明扫描通过。
+
+CLI 退出 0 要求处置绑定有效且没有未处置的可达告警。退出 1 表示仍有未处置可达告警或处置绑定已失效；即使原生扫描为零发现，绑定失效也阻断。退出 2 表示输入、工具、数据库、协议、转换、取消、超时、并发变化或清理错误。扫描误差仍需结合调用方式与部署事实审查，报告不是可利用性的证明。官方数据库在线更新；相同源码在不同时间可能得到不同结果，原件包含工具、Go、数据库地址和更新时间。单独 `-version` 不执行扫描，也不证明数据库完整可用。
+
+当前五项 LXD 发现按[源码适用性判断](go-vuln-lxd.md)与[准确记录](scripts/go-vuln-lxd.json)消费。记录绑定全部 Runner Go 源码、两锁、准确版本与 checksum、14 包集合、工具构建范围和五项 OSV 内容。变化会使判断失效；新增非 Go 编译或嵌入输入也会拒绝旧判断。原始告警与 native 3 保留，结果明确区分 source-not-affected 和未处置数量，不宣称没有发现或 daemon 安全。未知可达告警仍失败，模块/包层面的发现继续展示。判断变更须经领域核实和独立 PR 审查，不提供通用 ignore 或自动刷新。依赖修复和实际 daemon 调查各按其授权实施。
+
+工具、模块与编译缓存位于忽略的 `.cache/designs-go-vuln/`。每次原件保存在 `run-*` 目录，包含编号日志、`source-manifest.json`、原生 `scan.json`、`packages.json` 和 `assessment.json`。最后一项分别记录 JSON 完成、原生文本退出码、处置与未处置结果；它是扫描阶段结论，最终 CLI 还须完成输入复核和清理。正常结束会删除本次 source/control 副本；取消或单命令十分钟超时先终止进程组，CLI 总期限十五分钟，完成有界清理后失败。若进程清理未知，保留副本并按日志核查原 PID/进程组，不直接重跑或删除现场。CI 上传 `go-vuln-<run_id>-<attempt>`，仅包含上述原件，保留三天，不上传源码副本、模块缓存或可执行文件。
+
+恢复时先保留失败原件：缺工具、摘要错误或缺模块时重新运行准备；数据库或网络错误在确认原因后重试检查；源码并发变化先稳定工作树。取消不代表漏洞结果。工具升级时在独立缓存用固定 SDK 和同一构建参数至少构建两次，比较二进制 SHA-256，并核官方模块校验与 `go version -m`。在普通 PR 中一起更新唯一工具声明、Go 版本约束及本说明，重新运行准备、真实正常/命中/操作失败回归、类型、格式和链接检查。共享命令生命周期变化还须运行 `test:go-tools`。回退源码后按回退声明重新准备；不要修改摘要来接受来历不明的现有二进制。
+
 ## Go 检查
 
 [原生 Go 工作流](.github/workflows/go.yml)与本地使用同一个入口。运行环境为满足以下条件的 Linux amd64，不是任意 Linux 宿主。Node/Bun 版本见根 manifest，完整 Go SDK 版本见 `runner/go.mod`。另准备 GCC、`dbus-daemon`、Docker daemon、`unshare` 和 `/usr/sbin/nft`。真实进程测试要求非根 unified cgroup。nft 测试要求允许创建私有 user/network namespace。缺条件会失败，不将 skip 解释为通过。本地命令不安装包、修改服务或安全策略。
 
-Go 工作流固定使用 GitHub hosted `ubuntu-22.04`，在一次性 job 中用 apt 准备系统工具。随后以普通用户执行 `unshare --user --map-root-user --net /bin/true` 预检，失败就停止。Ubuntu 24.04 及后续版本默认限制无特权 user namespace，不能假定 `ubuntu-latest` 满足上述条件。不要用 sudo 运行测试，也不要修改 sysctl 或 AppArmor 来绕过拒绝。升级 runner 环境时重新验证 module、container 和 nft 三层；旧环境或部分层成功不证明新环境完整可用。平台支持范围见 [GitHub hosted runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)，发行版限制见 [Docker rootless 故障说明](https://docs.docker.com/engine/security/rootless/troubleshoot/)。
+完整测试的 `go` job 固定使用 GitHub hosted `ubuntu-22.04`，在一次性 job 中用 apt 准备系统工具。随后以普通用户执行 `unshare --user --map-root-user --net /bin/true` 预检，失败就停止。Ubuntu 24.04 及后续版本默认限制无特权 user namespace，不能假定 `ubuntu-latest` 满足上述条件。不要用 sudo 运行测试，也不要修改 sysctl 或 AppArmor 来绕过拒绝。升级 runner 环境时重新验证 module、container 和 nft 三层；旧环境或部分层成功不证明新环境完整可用。平台支持范围见 [GitHub hosted runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)，发行版限制见 [Docker rootless 故障说明](https://docs.docker.com/engine/security/rootless/troubleshoot/)。
 
 Go SDK 下载与模块准备分开。先按 [runner 工具链说明](runner/README.md#构建与检查)验证官方归档摘要。完整解包到临时或忽略目录，再将 `bin` 加入当前 shell 的 `PATH`。不要用仅含 `go`/`gofmt` 的格式工具目录编译。随后在仓库根运行：
 

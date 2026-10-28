@@ -13,6 +13,43 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  vulnerabilities:
+    name: Go dependency vulnerabilities
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: package.json
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: runner/go.mod
+          cache: false
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - run: bun run go:vuln:prepare
+      - run: bun run typecheck
+      - run: bun run test:go-vuln
+      - run: bun run go:vuln:check
+      - name: Retain vulnerability diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: go-vuln-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 3
+          if-no-files-found: ignore
+          include-hidden-files: true
+          path: |
+            .cache/designs-go-vuln/run-*/*.log
+            .cache/designs-go-vuln/run-*/source-manifest.json
+            .cache/designs-go-vuln/run-*/scan.json
+            .cache/designs-go-vuln/run-*/packages.json
+            .cache/designs-go-vuln/run-*/assessment.json
   go:
     name: Go runner checks
     runs-on: ubuntu-22.04
