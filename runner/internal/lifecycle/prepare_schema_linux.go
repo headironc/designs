@@ -284,6 +284,9 @@ func decodePrepareServices(raw map[string]json.RawMessage) (map[string]prepareUn
 			}
 			running = running && *unit.Sub == "running" && *s.Main > 1 && found && *s.Control == 0
 		}
+		// The original adapter read Unit/jobs/Service/processes separately. Its
+		// snapshot predicate only constrained the worker's active state; that
+		// worker could exit between reads. Do not invent an atomic PID/state pair.
 		if name != pauseWorker && !(name == controllerUnit || name == gatewayUnit || name == pauseTimer) && !running || (name == controllerUnit || name == gatewayUnit || name == pauseTimer) && !running && !inactive {
 			return nil, errRefused
 		}

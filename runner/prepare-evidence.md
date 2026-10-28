@@ -40,6 +40,8 @@ release 观察只读取两份公开 JSON 并核其原字节摘要，按 manifest
 
 JSON 拒绝缺失、非法 null、未知字段、重复或折叠别名及尾随值。整数保持准确类型，不经 float64；TTL 沿原 duration 秒数合同保留小数，先拒绝巨大指数再做精确数值检查。原 worker 前态可能 active 或 activating，不伪造“原先已排空”。
 
+原 adapter 分次读取 Unit、job 清单、Service 和进程清单。worker 可能在采样间退出，因此原件可同时保留较早的 active/running 与后续零 PID。本片保留这些历史观察，不把字段组合补成原子服务证据，也不据此宣称 worker 已排空。
+
 before 的 repository_row 有 7 列，credential_row 有 13 列。程序只检查必要公开实体/FK/endpoint-name 与 scalar shape。密文字段不做 Base64/hex 解码、解密、凭据可用性验证或单字段摘要，也不进入报告或原错误。完整性核验确实读取含密文的整体 bytes；报告准确使用 `credentials_not_decrypted_or_used`。
 
 原 producer 将 Python canonical JSON 追加一个 LF，并在 complete 中保存追加前的摘要。因此只移除磁盘 before 最后一个 LF 后计算 SHA256，不 TrimSpace，也不用 Go 重序列化、改 key 顺序或实现 Python canonical 框架。Unicode、escape、数字拼写和空白都由原字节决定。

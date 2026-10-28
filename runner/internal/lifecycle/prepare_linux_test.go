@@ -218,8 +218,12 @@ func TestPrepareSchemaBindingsAndExactBytes(t *testing.T) {
 				name = "services/services-before.json"
 				raw = bytes.Replace(f.originals[name], []byte(`"nucleiron-provider-watchdog.timer":{`), []byte(`"nucleiron-provider-watchdog.timer":{"main_pid":0,`), 1)
 			}
+			if bytes.Equal(raw, f.originals[name]) {
+				t.Fatal("fixture mutation was not applied")
+			}
 			testWrite(t, filepath.Join(f.amendment, name), raw, 0600)
-			if mode == "ttl_fraction" || mode == "ttl_exponent" || mode == "files_conflict" {
+			hashOnly := mode == "raw_hash" || mode == "extra_lf" || mode == "no_lf"
+			if name == "before.json" && !hashOnly {
 				testWrite(t, filepath.Join(f.amendment, "prepare.complete.json"), []byte(fmt.Sprintf("{\"before_sha256\":%q}\n", prepareTestSHA(raw[:len(raw)-1]))), 0600)
 			}
 			r := f.reader.observe(context.Background(), strings.Repeat("9", 64))
@@ -228,11 +232,55 @@ func TestPrepareSchemaBindingsAndExactBytes(t *testing.T) {
 			if (r.State == "prepare_records_consistent") != allowed {
 				t.Fatalf("%s: %+v", mode, r)
 			}
-			if mode == "raw_hash" && r.BeforeHash.State != "mismatch" {
-				t.Fatal("re-serialized before instead of hashing original bytes", r.BeforeHash)
+			if r.Lock.State != "observed" || r.Release.State != "metadata_observed" || r.Publication.State != "observed" {
+				t.Fatal("unrelated admission failure masked the mutation", r.Lock, r.Release, r.Publication)
 			}
-			if mode == "invocation_conflict" && r.CrossBinding.Code != "historical_invocation_conflict" {
-				t.Fatal("historical sampling conflict lost", r.CrossBinding)
+			schemaFailure := -1
+			switch mode {
+			case "intent_operation", "intent_null", "intent_unknown":
+				schemaFailure = 0
+			case "timer_unknown":
+				schemaFailure = 3
+			case "raw_hash", "files_conflict", "invocation_conflict", "boot_conflict", "ttl_fraction", "ttl_exponent", "worker_busy":
+			default:
+				schemaFailure = 1
+			}
+			for i, record := range r.Records {
+				if record.Presence.State != "observed" {
+					t.Fatal("missing input masked schema validation", record)
+				}
+				if i == schemaFailure {
+					if record.Schema.State != "unknown" || record.Schema.Code != "record_schema_or_binding" {
+						t.Fatal("intended schema refusal was not observed", record)
+					}
+				} else if record.Schema.State != "observed" {
+					t.Fatal("another schema failure masked the mutation", record)
+				}
+			}
+			if schemaFailure == 1 {
+				if r.BeforeHash.State != "unknown" || r.BeforeHash.Code != "before_hash_unavailable" {
+					t.Fatal("schema/framing must reject before the byte-seal check", r.BeforeHash)
+				}
+			} else if mode == "raw_hash" {
+				if r.BeforeHash.State != "mismatch" || r.BeforeHash.Code != "before_digest" || r.CrossBinding.State != "observed" {
+					t.Fatal("raw-byte mutation was not isolated from schema/binding", r.BeforeHash, r.CrossBinding)
+				}
+			} else if r.BeforeHash.State != "observed" {
+				t.Fatal("byte-seal failure masked the mutation", r.BeforeHash)
+			}
+			switch mode {
+			case "files_conflict", "boot_conflict":
+				if r.CrossBinding.State != "mismatch" || r.CrossBinding.Code != "historical_binding_conflict" {
+					t.Fatal("intended cross-binding refusal was not observed", r.CrossBinding)
+				}
+			case "invocation_conflict":
+				if r.CrossBinding.State != "mismatch" || r.CrossBinding.Code != "historical_invocation_conflict" {
+					t.Fatal("historical sampling conflict lost", r.CrossBinding)
+				}
+			default:
+				if allowed && r.CrossBinding.State != "observed" {
+					t.Fatal("valid mutation lost its cross-binding", r.CrossBinding)
+				}
 			}
 		})
 	}
@@ -469,7 +517,7 @@ func TestPrepareReleaseStagingIndependentAndUnsupportedPins(t *testing.T) {
 				testWrite(t, filepath.Join(f.reader.release, "entry.py"), []byte("x"), 0600)
 			case "member_link":
 				path := filepath.Join(f.reader.release, "entry.py")
-				if e := os.Link(path, filepath.Join(f.reader.release, "copy")); e != nil {
+				if e := os.Link(path, filepath.Join(f.reader.files.boundary, "retained-member")); e != nil {
 					t.Fatal(e)
 				}
 			case "adapters_missing":
@@ -534,7 +582,81 @@ func TestPrepareReleaseStagingIndependentAndUnsupportedPins(t *testing.T) {
 			} else if r.Release.State == "metadata_observed" {
 				t.Fatal("incomplete staging reported whole", r.Release)
 			}
+			switch mode {
+			case "manifest_null", "manifest_duplicate", "manifest_path_escape":
+				if r.Release.Manifest.State != "unknown" || r.Release.Manifest.Code != "manifest_schema" {
+					t.Fatal("manifest digest failure masked the intended schema case", r.Release.Manifest)
+				}
+			case "plan_null", "plan_identity", "plan_missing":
+				if r.Release.Plan.State != "unknown" || r.Release.Plan.Code != "plan_schema" {
+					t.Fatal("plan digest failure masked the intended schema case", r.Release.Plan)
+				}
+			case "plan_digest":
+				if r.Release.Plan.State != "mismatch" || r.Release.Plan.Code != "plan_digest" {
+					t.Fatal("digest-specific refusal was not observed", r.Release.Plan)
+				}
+			case "member_link":
+				if r.Release.OtherEntries != 0 || r.Release.Manifest.State != "observed" || r.Release.Plan.State != "observed" || r.Release.Adapters.State != "observed" {
+					t.Fatal("another staging refusal masked the hardlink", r.Release)
+				}
+				for _, member := range r.Release.Members {
+					want := "metadata_observed"
+					if member.Name == "entry.py" {
+						want = "unknown"
+					}
+					if member.State != want {
+						t.Fatal("hardlink member was not isolated", member)
+					}
+				}
+			}
 		})
+	}
+}
+
+func TestPrepareStagedMemberContentIsNotObserved(t *testing.T) {
+	f := newPrepareFixture(t)
+	// The fixed manifest remains byte-for-byte unchanged. A different body of
+	// the same size must never be described as a verified content hash.
+	testWrite(t, filepath.Join(f.reader.release, "entry.py"), []byte("new"), 0600)
+	r := f.reader.observe(context.Background(), strings.Repeat("9", 64))
+	assertPrepareRestrictions(t, r)
+	if r.Release.Manifest.State != "observed" || r.Release.State != "metadata_observed" || r.Release.Content != "not_observed_this_slice" {
+		t.Fatal("metadata was upgraded to content evidence", r.Release)
+	}
+	found := false
+	for _, member := range r.Release.Members {
+		if member.Name == "entry.py" {
+			found = true
+			if member.State != "metadata_observed" {
+				t.Fatal(member)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("fixed member observation omitted")
+	}
+}
+
+func TestPrepareWorkerMayExitBetweenHistoricalSamples(t *testing.T) {
+	f := newPrepareFixture(t)
+	// Independent original-format values: Unit was still active/running;
+	// later Service/GetUnitProcesses observations saw the worker's exit.
+	const before = `"nucleiron-provider-watchdog.service":{"active":"active","sub":"running","job_id":0,"jobs":[],"invocation":"63717a25032d4e048d801cbf935a18dc","main_pid":120,"control_pid":0,"pids":[120],"result":"success","restarts":0,"start_us":12345678901234567,"exit_us":0,"exit_status":0,"exit_code":0}`
+	const after = `"nucleiron-provider-watchdog.service":{"active":"active","sub":"running","job_id":0,"jobs":[],"invocation":"63717a25032d4e048d801cbf935a18dc","main_pid":0,"control_pid":0,"pids":[],"result":"success","restarts":0,"start_us":12345678901234567,"exit_us":12345678901234568,"exit_status":0,"exit_code":1}`
+	name := "services/services-before.json"
+	raw := bytes.Replace(f.originals[name], []byte(before), []byte(after), 1)
+	if bytes.Equal(raw, f.originals[name]) {
+		t.Fatal("historical transition fixture was not applied")
+	}
+	testWrite(t, filepath.Join(f.amendment, name), raw, 0600)
+	r := f.reader.observe(context.Background(), strings.Repeat("9", 64))
+	assertPrepareRestrictions(t, r)
+	if r.State != "prepare_records_consistent" || r.Records[3].Schema.State != "observed" || r.BeforeHash.State != "observed" || r.CrossBinding.State != "observed" || r.Historical == nil {
+		t.Fatalf("legitimate historical transition rejected: %+v", r)
+	}
+	worker := r.Historical.Services["nucleiron-provider-watchdog.service"]
+	if worker.Active != "active" || worker.Main != 0 || worker.Control != 0 || worker.PIDs != 0 || worker.Invocation != "63717a25032d4e048d801cbf935a18dc" {
+		t.Fatal("historical facts were rewritten into an atomic state", worker)
 	}
 }
 

@@ -1,6 +1,6 @@
 # Runner 的 Go 结构与实施切片
 
-本设计将 runner 自有实现改为 Go，并按独立业务结果交付。[专用防火墙重载](README.md)、[guest bootstrap](bootstrap.md)、[provider 异常停接](watchdog.md)、[Go guard 正常启动准入](startup.md)、[guard watchdog 检查与状态持久化](guard-watchdog.md)、[单次 VM 创建](create.md)、[VM 删除与容量释放](delete.md)、[provider 正常只读协议](read.md)、[原执行身份采集](execution.md)、[闭合诊断](closure.md)、[watchdog 暂停](pause.md)和 [gateway 停止](gateway.md)已合入。本片新增 [历史 prepare 原件观察](prepare-evidence.md)，保留历史来源与当前前态缺口，不恢复旧请求。异常停接已接入 GARM client 与 go-systemd，包含原停止 job 恢复。已修正的 [ScaleSet 池身份](#scaleset-的-provider-池身份)保持不变。本文已采用下述 Go 包，依赖随对应消费者接入。现有 Python 快照用于行为对照，不由本片执行。GARM、LXD provider、nginx、rsyslog、Squid 和 dnsproxy 保持各自职责，不重写第三方组件。
+本设计将 runner 自有实现改为 Go，并按独立业务结果交付。[专用防火墙重载](README.md)、[guest bootstrap](bootstrap.md)、[provider 异常停接](watchdog.md)、[Go guard 正常启动准入](startup.md)、[guard watchdog 检查与状态持久化](guard-watchdog.md)、[单次 VM 创建](create.md)、[VM 删除与容量释放](delete.md)、[provider 正常只读协议](read.md)、[原执行身份采集](execution.md)、[闭合诊断](closure.md)、[watchdog 暂停](pause.md)和 [gateway 停止](gateway.md)已合入。本片新增 [历史 prepare 原件观察](prepare-evidence.md)，保留历史来源与当前前态缺口，不恢复旧请求。异常停接已接入 GARM client 与 go-systemd，包含原停止 job 恢复。已修正的 [ScaleSet 池身份](#scaleset-的-provider-池身份)保持不变。本文已采用下述 Go 包，依赖随对应消费者接入。现有 Python 快照用于行为对照，历史操作仍保留原身份、原件与恢复入口；旧流程保持停止，不由本片执行。GARM、LXD provider、nginx、rsyslog、Squid 和 dnsproxy 保持各自职责，不重写第三方组件。
 
 跨仓库边界由 [CI 架构](../ci-architecture.md#runner-与-kiln) 维护。designs 拥有 runner 自有程序及发布成品。Kiln 拥有任务镜像，消费仓库拥有工作流和业务检查。新代码在独立工作树准备，原接入现场和未知操作保全。
 
