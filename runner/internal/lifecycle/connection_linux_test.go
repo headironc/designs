@@ -316,6 +316,32 @@ func TestConnectionStopRecoveryNeverResendsStop(t *testing.T) {
 	}
 }
 
+func TestConnectionSealedStopRequiresCurrentDrain(t *testing.T) {
+	for _, kind := range []string{"restarted", "residual"} {
+		t.Run(kind, func(t *testing.T) {
+			f := connectionFixtureFor(t)
+			f.mutate = func(r *http.Request, _ *http.Response) error {
+				if r.Method == "POST" && r.URL.Host == "127.0.0.1:9997" {
+					return io.ErrUnexpectedEOF
+				}
+				return nil
+			}
+			if _, _, err := f.executor.execute(context.Background(), f.raw); err == nil || !f.bus.stopped {
+				t.Fatal("unknown creation not stopped")
+			}
+			if kind == "restarted" {
+				f.bus.started = true
+			} else {
+				f.bus.drainFailure = "controller"
+			}
+			requests := f.requests
+			if _, stage, err := f.executor.execute(context.Background(), f.raw); err == nil || stage != "original_stop_unknown" || f.requests != requests || !reflect.DeepEqual(f.bus.sends, []string{"stop"}) {
+				t.Fatal("historical stop hid current resources", stage, err)
+			}
+		})
+	}
+}
+
 func TestConnectionRetirementPreventsUnfinishedCreation(t *testing.T) {
 	f := connectionFixtureFor(t)
 	f.mutate = func(r *http.Request, _ *http.Response) error {
@@ -513,10 +539,20 @@ func TestConnectionImageUsesPrivateLXDRead(t *testing.T) {
 }
 
 func TestConnectionCredentialFailuresNeverRepeatIssuance(t *testing.T) {
-	for _, kind := range []string{"admin-scope", "registration-expiry", "registration-lost", "remote-auth-lost"} {
+	for _, kind := range []string{"admin-scope", "admin-expiry", "registration-expiry", "registration-lost", "remote-auth-lost"} {
 		t.Run(kind, func(t *testing.T) {
 			f := connectionFixtureFor(t)
 			f.mutate = func(r *http.Request, response *http.Response) error {
+				if kind == "admin-expiry" && r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/access_tokens") {
+					raw, _ := io.ReadAll(response.Body)
+					var wire map[string]any
+					json.Unmarshal(raw, &wire)
+					if strings.HasPrefix(fmt.Sprint(wire["token"]), "fixture-admin") {
+						wire["expires_at"] = "invalid"
+					}
+					raw, _ = json.Marshal(wire)
+					response.Body = io.NopCloser(strings.NewReader(string(raw)))
+				}
 				if kind == "admin-scope" && r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/access_tokens") {
 					raw, _ := io.ReadAll(response.Body)
 					raw = []byte(strings.Replace(string(raw), `"administration":"write"`, `"administration":"read"`, 1))

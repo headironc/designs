@@ -77,16 +77,9 @@ func (e connectionExecutor) retire(ctx context.Context, raw []byte) (connectionC
 		if err != nil {
 			return state, errRefused
 		}
-		var wire struct {
-			Token   string     `json:"token"`
-			Expires *time.Time `json:"expires_at"`
-		}
-		if unambiguous(r.Body) != nil || json.Unmarshal(r.Body, &wire) != nil || !validToken(wire.Token) {
+		t, _ := connectionToken(r.Body)
+		if !validToken(t.token) {
 			return state, errRefused
-		}
-		t := observerToken{token: wire.Token}
-		if wire.Expires != nil {
-			t.expires = wire.Expires.Unix()
 		}
 		status, err := installation.retire(ctx, name, t)
 		if err != nil {

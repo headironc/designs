@@ -80,6 +80,17 @@ func stopConnectionController(ctx context.Context, s *serviceFiles, p connection
 		if _, err := reader.read(s, "controller.stopped.json", &stopped); err != nil || stopped.Intent != bytesSHA(s.raw["controller.stop.intent.json"]) || stopped.Job != bytesSHA(s.raw["controller.stop.job.json"]) || stopped.Event != bytesSHA(s.raw["controller.stop.event.json"]) || !sessionControllerStopped(original.Controller, stopped.Controller) {
 			return errRefused
 		}
+		if identity() != nil {
+			return errRefused
+		}
+		current, err := control.controller(ctx, &original.Controller)
+		if err != nil || !sessionControllerStopped(original.Controller, current) || !equalSessionController(current, stopped.Controller) || control.controllerDrained(ctx, original.Controller, current) != nil {
+			return errRefused
+		}
+		again, err := control.controller(ctx, &original.Controller)
+		if err != nil || !equalSessionController(current, again) {
+			return errRefused
+		}
 		return identity()
 	}
 	if identity() != nil {

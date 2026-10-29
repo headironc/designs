@@ -56,22 +56,39 @@ func (a *connectionAPI) adminMint(ctx context.Context, jwt string) error {
 
 func (a *connectionAPI) adminToken() (observerToken, error) {
 	r, err := a.response("admin-mint")
+	if err != nil {
+		return observerToken{}, errRefused
+	}
+	token, err := connectionToken(r.Body)
+	if err != nil {
+		return token, errRefused
+	}
 	var wire struct {
-		Token       *string           `json:"token"`
-		Expires     *time.Time        `json:"expires_at"`
 		Permissions map[string]string `json:"permissions"`
 		Selection   *string           `json:"repository_selection"`
 	}
-	if err != nil || unambiguous(r.Body) != nil || json.Unmarshal(r.Body, &wire) != nil || wire.Token == nil || !validToken(*wire.Token) {
-		return observerToken{}, errRefused
-	}
-	token := observerToken{token: *wire.Token}
-	if wire.Expires != nil {
-		token.expires = wire.Expires.Unix()
-	}
-	if r.Status != 201 || wire.Expires == nil || token.expires <= r.Observed || token.expires > r.Observed+3600 || token.expires < a.plan.Source.RequiredUntil || wire.Selection == nil || *wire.Selection != "selected" || len(wire.Permissions) != 2 || wire.Permissions["metadata"] != "read" || wire.Permissions["administration"] != "write" {
+	if json.Unmarshal(r.Body, &wire) != nil || r.Status != 201 || token.expires <= r.Observed || token.expires > r.Observed+3600 || token.expires < a.plan.Source.RequiredUntil || wire.Selection == nil || *wire.Selection != "selected" || len(wire.Permissions) != 2 || wire.Permissions["metadata"] != "read" || wire.Permissions["administration"] != "write" {
 		return token, errRefused
 	}
+	return token, nil
+}
+
+// A usable original token remains a retirement responsibility even when its
+// expiry is malformed. Unknown expiry forbids the expiry-based fallback.
+func connectionToken(raw []byte) (observerToken, error) {
+	var wire struct {
+		Token   string          `json:"token"`
+		Expires json.RawMessage `json:"expires_at"`
+	}
+	if unambiguous(raw) != nil || json.Unmarshal(raw, &wire) != nil || !validToken(wire.Token) {
+		return observerToken{}, errRefused
+	}
+	token := observerToken{token: wire.Token}
+	var expires time.Time
+	if len(wire.Expires) == 0 || string(wire.Expires) == "null" || json.Unmarshal(wire.Expires, &expires) != nil || expires.IsZero() {
+		return token, errRefused
+	}
+	token.expires = expires.Unix()
 	return token, nil
 }
 
@@ -226,12 +243,13 @@ func (a *connectionAPI) acquireCredentials(ctx context.Context, ad appAdmission)
 	if err != nil {
 		return connectionActions{}, errRefused
 	}
-	if api.mint(ctx, "audit-mint", signed.Token, true) != nil {
-		return connectionActions{}, errRefused
+	mintErr := api.mint(ctx, "audit-mint", signed.Token, true)
+	if response, err := a.response("audit-mint"); err == nil {
+		known, _ := connectionToken(response.Body)
+		defer cleanupToken("audit", known)
 	}
 	audit, err := api.minted("audit-mint", true)
-	defer cleanupToken("audit", audit)
-	if err != nil {
+	if mintErr != nil || err != nil {
 		return connectionActions{}, errRefused
 	}
 	if api.repositories(ctx, "audit-repositories", audit.token) != nil {
@@ -246,12 +264,13 @@ func (a *connectionAPI) acquireCredentials(ctx context.Context, ad appAdmission)
 	if state, err := retire.retire(ctx, "audit", audit); err != nil || state != "revocation_rejection_observed" {
 		return connectionActions{}, errRefused
 	}
-	if api.check(ctx) != nil || a.adminMint(ctx, signed.Token) != nil {
+	if api.check(ctx) != nil {
 		return connectionActions{}, errRefused
 	}
+	mintErr = a.adminMint(ctx, signed.Token)
 	admin, err := a.adminToken()
 	defer cleanupToken("admin", admin)
-	if err != nil {
+	if mintErr != nil || err != nil {
 		return connectionActions{}, errRefused
 	}
 	if api.repositories(ctx, "admin-repositories", admin.token) != nil {
