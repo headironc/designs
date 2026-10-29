@@ -8,6 +8,8 @@
 
 [GitHub 只读观察凭据](github-observer.md)为 capture、diagnose、pause 和 gateway 提供单次 installation token 供应、受管读取及原 token 退役恢复。入口消费已有 GARM 会话，不再次登录；源码与隔离检查不执行真实凭据或接入操作。
 
+[首次 disabled 连接](connection.md)创建并核对 Nucleus 的 repository/ScaleSet 两端绑定，向执行采集提供固定事实。临时管理、registration 和 Actions 凭据分别恢复与退役；创建 unknown 保留原操作，并至多停止一次原 controller。
+
 ## 构建与检查
 
 仓库完整验收使用根目录的 [Go 检查入口](../README.md#go-检查)。本地与原生 CI 运行相同三层检查，包含 race、五个命令构建、私有降权容器和 nft namespace。下文保留各能力的底层命令及运行边界。

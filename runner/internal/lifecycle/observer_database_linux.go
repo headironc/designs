@@ -21,6 +21,7 @@ type observerDatabase struct {
 	Session  sessionDatabase `json:"session"`
 	Payload  []byte          `json:"payload"`
 	Identity string          `json:"identity_sha256"`
+	Source   string          `json:"credential_source_sha256"`
 	UID      uint32          `json:"uid"`
 	GID      uint32          `json:"gid"`
 	Groups   []int           `json:"groups"`
@@ -73,7 +74,15 @@ func observerDatabaseRows(ctx context.Context, tx *sql.Tx, p observerPlan, sp se
 	if err != nil {
 		return out, errRefused
 	}
-	return observerDatabase{Session: user, Payload: append([]byte(nil), payload...), Identity: bytesSHA(raw)}, nil
+	stable, err := json.Marshal(struct {
+		Controller, User     string
+		Generation           int64
+		Credential, Endpoint []any
+	}{user.Controller, user.User, user.Generation, r, e})
+	if err != nil {
+		return out, errRefused
+	}
+	return observerDatabase{Session: user, Payload: append([]byte(nil), payload...), Identity: bytesSHA(raw), Source: bytesSHA(stable)}, nil
 }
 
 func readObserverDatabase(ctx context.Context, files databaseFiles, p observerPlan, sp sessionPlan) (observerDatabase, error) {
@@ -105,7 +114,7 @@ func observeObserverDatabase(ctx context.Context, p observerPlan, sp sessionPlan
 	raw, err := runDatabaseProcess(ctx, "/proc/self/exe", []string{"--github-observer-database"}, input, uid, gid)
 	defer clear(raw)
 	var out observerDatabase
-	if err != nil || strictObject(raw, &out) != nil || out.UID != uid || out.GID != gid || out.Groups == nil || len(out.Groups) != 0 || out.Producer != producer || out.Session.Controller != p.Controller || !digestPattern.MatchString(out.Identity) || bytesSHA(out.Payload) != p.PayloadSHA {
+	if err != nil || strictObject(raw, &out) != nil || out.UID != uid || out.GID != gid || out.Groups == nil || len(out.Groups) != 0 || out.Producer != producer || out.Session.Controller != p.Controller || !digestPattern.MatchString(out.Identity) || !digestPattern.MatchString(out.Source) || bytesSHA(out.Payload) != p.PayloadSHA {
 		clear(out.Payload)
 		return observerDatabase{}, errRefused
 	}

@@ -2,6 +2,8 @@
 
 `runner-admin capture-execution` 为一个已经分配且正在运行的准确 job 保存原身份。入口消费受保护的可信请求，再读取 GitHub、GARM、LXD 和宿主事实。回执只证明采集时的对应关系，不证明 job 成功、资源闭合或清理资格。尚未分配、bootstrap 失败和历史缺失身份不在本入口的接纳范围。
 
+采用[首次 disabled 连接](connection.md)时，传入 `--disabled-connection-sha256=<producer>`。入口在共享租约内核固定连接槽的原封印。原 controller、仓库、ScaleSet、pool 和镜像与当前 guard 及两端实际观察相符，才接受采集。该参数不授予启用许可，也不替代新执行的凭据和准入检查。
+
 `internal/lifecycle` 拥有可信请求、观察记录、完成封印和原结果回读。`internal/provider` 继续拥有 policy、active、永久锁与正常模式准入。采集不创建 VM、不注册 runner、不派发或取消 job，也不修改 guard、启停服务、迁移记录或释放容量。
 
 ## 固定入口与输入

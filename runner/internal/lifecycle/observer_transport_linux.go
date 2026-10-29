@@ -32,6 +32,9 @@ type observerCall struct {
 	Body          string `json:"body_sha256"`
 	Authorization string `json:"authorization_sha256"`
 	Started       int64  `json:"started_at"`
+	Scheme        string `json:"scheme,omitempty"`
+	Host          string `json:"host,omitempty"`
+	AuthScheme    string `json:"authorization_scheme,omitempty"`
 }
 
 // One SDK invocation is bound to one persisted intent. Replaying a retained
@@ -44,10 +47,22 @@ type observerTransport struct {
 	now                                                 func() time.Time
 	check                                               func(context.Context) error
 	sent                                                atomic.Bool
+	// Empty fields preserve the original observer wire and journal contract.
+	scheme, host, authScheme string
 }
 
 func (t *observerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if !t.sent.CompareAndSwap(false, true) || req.URL.Scheme != "https" || req.URL.Host != "api.github.com" || req.URL.User != nil || req.URL.Fragment != "" || req.URL.RawPath != "" || req.URL.ForceQuery || req.Method != t.method || req.URL.Path != t.path || req.URL.RawQuery != t.query || req.Header.Get("Authorization") != "Bearer "+t.token {
+	scheme, host, auth := t.scheme, t.host, t.authScheme
+	if scheme == "" {
+		scheme = "https"
+	}
+	if host == "" {
+		host = "api.github.com"
+	}
+	if auth == "" {
+		auth = "Bearer"
+	}
+	if !t.sent.CompareAndSwap(false, true) || req.URL.Scheme != scheme || req.URL.Host != host || req.URL.User != nil || req.URL.Fragment != "" || req.URL.RawPath != "" || req.URL.ForceQuery || req.Method != t.method || req.URL.Path != t.path || req.URL.RawQuery != t.query || req.Header.Get("Authorization") != auth+" "+t.token {
 		return nil, errRefused
 	}
 	var body []byte
@@ -65,7 +80,7 @@ func (t *observerTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	}
 	a := sessionAcquirer{files: t.store.files}
 	intentName, responseName := t.step+".intent.json", t.step+".response.json"
-	i := observerCall{1, t.request, t.producer, t.step, t.method, t.path, t.query, bytesSHA(body), bytesSHA([]byte(t.token)), t.now().Unix()}
+	i := observerCall{Version: 1, Request: t.request, Producer: t.producer, Step: t.step, Method: t.method, Path: t.path, Query: t.query, Body: bytesSHA(body), Authorization: bytesSHA([]byte(t.token)), Started: t.now().Unix(), Scheme: t.scheme, Host: t.host, AuthScheme: t.authScheme}
 	exists := !a.absent(t.store, intentName)
 	if exists {
 		var saved observerCall

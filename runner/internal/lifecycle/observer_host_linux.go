@@ -2,8 +2,8 @@ package lifecycle
 
 import (
 	"context"
+	"crypto/rsa"
 	"os"
-	"reflect"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -12,8 +12,33 @@ import (
 
 // This composition only observes the existing credential window. It does not
 // invoke its rotation, installation, StopUnit, StartUnit or Login paths.
+type appAdmission struct {
+	key      *rsa.PrivateKey
+	origin   observerOrigin
+	token    string
+	services *sessionBus
+	session  sessionPlan
+	ready    sessionWindowReady
+	check    func(context.Context) (string, error)
+}
+
 func admitObserver(ctx context.Context, p observerPlan, s *serviceFiles, consume func(observerAdmission) error) error {
-	if os.Getuid() != 0 || os.Geteuid() != 0 || s == nil || s.files.uid != 0 || s.files.boundary != "/" || s.path != sessionParent+"/github-observer" || s.lockPath != sessionParent+"/session.lock" || !s.unchanged() {
+	if s == nil || s.path != sessionParent+"/github-observer" {
+		return errRefused
+	}
+	return withAppSource(ctx, p, s, func(a appAdmission) error {
+		return consume(observerAdmission{key: a.key, origin: a.origin, check: func(c context.Context) error {
+			identity, err := a.check(c)
+			if err != nil || identity != a.origin.Database {
+				return errRefused
+			}
+			return nil
+		}})
+	})
+}
+
+func withAppSource(ctx context.Context, p observerPlan, s *serviceFiles, consume func(appAdmission) error) error {
+	if os.Getuid() != 0 || os.Geteuid() != 0 || s == nil || s.files.uid != 0 || s.files.boundary != "/" || s.path != sessionParent+"/github-observer" && s.path != sessionParent+"/connection" || s.lockPath != sessionParent+"/session.lock" || !s.unchanged() {
 		return errRefused
 	}
 	source, err := s.sibling("session")
@@ -98,34 +123,34 @@ func admitObserver(ctx context.Context, p observerPlan, s *serviceFiles, consume
 				if err != nil {
 					return errRefused
 				}
-				check := func(c context.Context) error {
+				check := func(c context.Context) (string, error) {
 					if c.Err() != nil || time.Now().Unix() >= credential.expires || !source.unchanged() || !window.unchanged() || !samePath(config, controllerConfig) || historyCheck() != nil || watchdogCheck() != nil || providerCheck() != nil || b.retirementTarget(c, sp, issued, ready) != nil || processes.check(c, sp.Boot, ready.After.Main) != nil {
-						return errRefused
+						return "", errRefused
 					}
 					gateway, err := b.gatewayIdle(c)
 					if err != nil || gateway != initialGateway {
-						return errRefused
+						return "", errRefused
 					}
 					machine, err := observeSessionMachine(c, "/var/snap/lxd/common/lxd/unix.socket", p.Controller)
 					if err != nil || machine != initialMachine {
-						return errRefused
+						return "", errRefused
 					}
 					current, err := observeObserverDatabase(c, p, sp)
 					defer clear(current.Payload)
-					if err != nil || !reflect.DeepEqual(current, database) {
-						return errRefused
+					if err != nil || current.Source != database.Source {
+						return "", errRefused
 					}
 					client := newBoundSessionClient(nil, nil, func(c context.Context) error { return b.retirementTarget(c, sp, issued, ready) })
 					defer client.close()
 					if client.controller(c, credential.token, p.Controller) != nil || !source.unchanged() || !s.unchanged() || historyCheck() != nil || watchdogCheck() != nil || providerCheck() != nil {
-						return errRefused
+						return "", errRefused
 					}
-					return nil
+					return current.Identity, nil
 				}
-				if check(ctx) != nil {
+				if _, err := check(ctx); err != nil {
 					return errRefused
 				}
-				return consume(observerAdmission{key: key, origin: observerOrigin{bytesSHA(source.raw["complete.json"]), database.Identity, issued.Origin.ConfigSHA, issued.Origin.Invocation, credential.expires}, check: check})
+				return consume(appAdmission{key: key, origin: observerOrigin{bytesSHA(source.raw["complete.json"]), database.Identity, issued.Origin.ConfigSHA, issued.Origin.Invocation, credential.expires}, token: credential.token, services: b, session: sp, ready: ready, check: check})
 			})
 		})
 	})
