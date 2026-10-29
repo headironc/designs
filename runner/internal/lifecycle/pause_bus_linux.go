@@ -123,9 +123,20 @@ func (b *pauseBus) stopTimer(ctx context.Context) (pauseJob, error) {
 }
 
 func (b *unitBus) stopUnit(ctx context.Context, unit string) (pauseJob, error) {
+	return b.unitJob(ctx, unit, "StopUnit")
+}
+
+func (b *unitBus) startController(ctx context.Context) (pauseJob, error) {
+	return b.unitJob(ctx, controllerUnit, "StartUnit")
+}
+
+func (b *unitBus) unitJob(ctx context.Context, unit, method string) (pauseJob, error) {
+	if method != "StopUnit" && (method != "StartUnit" || unit != controllerUnit) {
+		return pauseJob{}, errRefused
+	}
 	// Preserve and validate the actual returned object path. The convenience
 	// SDK wrapper reduces it to an int, which cannot retain this wire evidence.
-	call := b.control.Object(b.owner, pauseManagerPath).CallWithContext(ctx, pauseManager+".Manager.StopUnit", dbus.FlagNoAutoStart, unit, "fail")
+	call := b.control.Object(b.owner, pauseManagerPath).CallWithContext(ctx, pauseManager+".Manager."+method, dbus.FlagNoAutoStart, unit, "fail")
 	if call.Err != nil || len(call.Body) != 1 {
 		return pauseJob{}, errRefused
 	}

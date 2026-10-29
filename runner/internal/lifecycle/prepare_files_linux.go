@@ -78,7 +78,10 @@ func (s *prepareFiles) open(path string, directory bool, mode uint32, body bool)
 	return v, nil
 }
 func (s *prepareFiles) read(path string, limit int64) ([]byte, error) {
-	v, err := s.open(path, false, 0600, true)
+	return s.readMode(path, 0600, limit)
+}
+func (s *prepareFiles) readMode(path string, mode uint32, limit int64) ([]byte, error) {
+	v, err := s.open(path, false, mode, true)
 	if err != nil || v == nil {
 		return nil, err
 	}

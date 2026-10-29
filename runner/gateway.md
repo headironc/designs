@@ -22,6 +22,8 @@
 
 凭据只在首次 live 准入时惰性读取已有 root `0600` raw token 文件。GitHub 文件仍是待授权供应的部署输入；不读取或导出 `gh` OAuth，不登录、mint 或刷新。恢复已有 slot 不读取这些文件。SQLite 当前配置路径与快照不参与发送准入，也不证明 controller 的运行数据库连接。
 
+固定受管 GARM 路径另需 `--garm-session-sha256`。原发行来源、共享租约、期限和进程秘密保护沿[管理会话合同](session.md)核验。
+
 ## 准确服务与发送窗口
 
 首次 gateway 必须 settled active/running、MainPID 非零、ControlPID 为零且无 job。程序从实际加载属性核验固定 nginx 命令、DynamicUser、用户、KillMode、信号、超时和停止行为，拒绝额外停止 hooks、反向停止传播及宿主动作。`SuccessAction`、`FailureAction`、`JobTimeoutAction` 和 `StartLimitAction` 必须明确为 `none`；`SuccessExitStatus` 必须为空。

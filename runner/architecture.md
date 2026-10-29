@@ -140,7 +140,8 @@ guard 的共享 policy 拥有 `controller_id`、`repository_id`、`scaleset_name
 | [原执行绑定的 watchdog 暂停](pause.md)（已合入）       | 准确终结 job 的原执行取得唯一 timer job 结果与原 worker 排空事实        | 全局 live 准入、固定独立状态 slot、原事件恢复及只读诊断消费；不停止 worker，不恢复 timer，不含 controller/gateway/凭据/许可/清理/部署 |
 | [原执行绑定的 gateway 停止](gateway.md)（已合入）      | 已确认原 watchdog 暂停的执行取得唯一 gateway job 与原进程排空事实       | 共享原 pause 持锁消费、operation 互斥、固定 gateway slot、停止传播检查及原事件恢复；不停止 controller，不处理凭据、许可、清理或部署   |
 | [历史 prepare 原件观察](prepare-evidence.md)（已合入） | 取得准确五件的内部一致性、原字节摘要和 staging 观察                     | 固定只读路径与原锁，不恢复原请求；来源、外部 preflight、凭据和当前安装前态缺口保持                                                    |
-| [当前安装文件比对](installed-evidence.md)（本片）      | 取得固定 25 文件与原 host-plan 的当前匹配、漂移或具体缺口               | 原锁与固定计划、流式 hash、完整 metadata、空 xattrs 合同及前后复查；保留完整 Host.facts、服务和恢复许可缺口                           |
+| [当前安装文件比对](installed-evidence.md)（已合入）    | 取得固定 25 文件与原 host-plan 的当前匹配、漂移或具体缺口               | 原锁与固定计划、流式 hash、完整 metadata、空 xattrs 合同及前后复查；保留完整 Host.facts、服务和恢复许可缺口                           |
+| [GARM 管理会话窗口](session.md)（本片）                | 停接窗口取得一次有来源和期限的管理会话，并支持受管消费及到期退役        | 原历史与消费者准入、JWT 认证域轮换、原服务 job、24 小时 TTL、单次登录和实际拒绝；不启用接单，不关闭历史 unknown                       |
 | [records-only 维护窗口](records-recovery.md)           | 在准确许可下清理原 GARM 遗留记录，并回到停止且停接的状态                | 签发、原 job 启动准入、维护读取、清理、停止、guard 恢复和许可退役；不迁用旧许可，不含正常服务恢复或启用接单                           |
 | watchdog GARM 客户端接入（已合入）                     | 原停接流程通过 GARM client 完成同一准确目标禁用与读回                   | 保留身份、输入、时限、未知登录和禁用请求边界；不同时改造 systemd 停止恢复                                                             |
 | watchdog systemd 停止与恢复（已合入）                  | 一次停止请求具有可追踪的原 job 与终态核验                               | go-systemd 订阅、写前记录、原 job 回执及 unit/进程/cgroup 核验；丢失终态不补造成功，旧 CLI 记录保全拒绝自动迁移，不重新接入或部署     |
@@ -152,7 +153,7 @@ guard 的共享 policy 拥有 `controller_id`、`repository_id`、`scaleset_name
 
 每次开始后续片前，依据已经到位的消费者重新检查边界。若某一行包含两个可独立验收结果，再拆小。同一恢复不变量跨层时保留在一片，确保中间版本也能安全运行。
 
-已合入组件的具体行为与检查分别由 [firewall](README.md)、[bootstrap](bootstrap.md)、[watchdog](watchdog.md) 和 guard 各入口文档维护。采集和原结果回读由 [execution](execution.md) 维护，诊断由 [closure](closure.md) 维护，watchdog 暂停由 [pause](pause.md) 维护，gateway 停止由 [gateway](gateway.md) 维护，历史原件由 [prepare 原件观察](prepare-evidence.md) 维护，本片由 [安装文件比对](installed-evidence.md) 维护，其余片再按真实依赖选择。日志采集继续消费 rsyslog 与 logrotate，不加入无消费者的 Go 日志程序。
+已合入组件的具体行为与检查分别由 [firewall](README.md)、[bootstrap](bootstrap.md)、[watchdog](watchdog.md) 和 guard 各入口文档维护。采集和原结果回读由 [execution](execution.md) 维护，诊断由 [closure](closure.md) 维护，watchdog 暂停由 [pause](pause.md) 维护，gateway 停止由 [gateway](gateway.md) 维护。历史原件与当前安装分别由 [prepare 原件观察](prepare-evidence.md)和[安装文件比对](installed-evidence.md)维护。本片由[管理会话窗口](session.md)维护，其余片再按真实依赖选择。日志采集继续消费 rsyslog 与 logrotate，不加入无消费者的 Go 日志程序。
 
 ## 构建、验证与后续切换
 
@@ -166,4 +167,4 @@ guard 的共享 policy 拥有 `controller_id`、`repository_id`、`scaleset_name
 
 ## 交付范围
 
-结构说明随实现保持更新，运行实现按独立业务结果交付。108 份本地历史源码及既有构建检查保全，不整体进入实现 PR。本片交付固定 25 个安装文件与历史计划的只读比对；controller、其他原操作/凭据来源、records-only 和运行切换仍待后续实施。运行版本以稳定交付为准，不拼接修复中的文件。
+结构说明随实现保持更新，运行实现按独立业务结果交付。108 份本地历史源码及既有构建检查保全，不整体进入实现 PR。本片交付 GARM 管理会话窗口及其现有 Go 消费者。其他凭据供应、完整连接、records-only 和运行切换仍待后续实施。运行版本以稳定交付为准，不拼接修复中的文件。

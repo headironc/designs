@@ -131,6 +131,10 @@ func gatewayDependencies(u map[string]any) (map[string][]string, error) {
 }
 
 func (b *gatewayBus) upstreams(ctx context.Context, u map[string]any) error {
+	return b.loadedUpstreams(ctx, u, true)
+}
+
+func (b *gatewayBus) loadedUpstreams(ctx context.Context, u map[string]any, active bool) error {
 	deps, err := gatewayDependencies(u)
 	if err != nil {
 		return err
@@ -154,7 +158,7 @@ func (b *gatewayBus) upstreams(ctx context.Context, u map[string]any) error {
 		if err != nil || up["Id"] != unit || up["LoadState"] != "loaded" || !pauseBool(up["StopWhenUnneeded"], false) {
 			return errRefused
 		}
-		if (unit == controllerUnit || unit == firewallUnit) && up["ActiveState"] != "active" {
+		if active && (unit == controllerUnit || unit == firewallUnit) && up["ActiveState"] != "active" {
 			return errRefused
 		}
 	}

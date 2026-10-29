@@ -13,16 +13,24 @@ import (
 )
 
 func lazyAdmission(files protectedFiles, githubPath, garmPath string) func(context.Context, receipt) (string, error) {
+	return sessionLiveAdmission(files, githubPath, garmPath, "")
+}
+
+func sessionLiveAdmission(files protectedFiles, githubPath, garmPath, producer string) func(context.Context, receipt) (string, error) {
 	return func(ctx context.Context, r receipt) (string, error) {
 		a, err := files.read(githubPath, 0600, 64*1024+1)
 		if err != nil {
 			return "", errRefused
 		}
-		b, err := files.read(garmPath, 0600, 64*1024+1)
+		credential, err := loadGARMToken(files, garmPath, sessionParent, producer, time.Now())
 		if err != nil {
 			return "", errRefused
 		}
-		gh, ga := strings.TrimSpace(string(a)), strings.TrimSpace(string(b))
+		defer credential.close()
+		if credential.controller != "" && credential.controller != r.Expected.Controller {
+			return "", errRefused
+		}
+		gh, ga := strings.TrimSpace(string(a)), credential.token
 		if !validToken(gh) || !validToken(ga) {
 			return "", errRefused
 		}
@@ -46,6 +54,7 @@ func runGateway(ctx context.Context, args []string, output, diagnostic io.Writer
 	pauseSHA := f.String("pause-sha256", "", "trusted original pause producer")
 	gh := f.String("github-token-file", "", "existing credential for a first request")
 	ga := f.String("garm-token-file", "", "existing credential for a first request")
+	sessionSHA := f.String("garm-session-sha256", "", "trusted producer of a managed GARM session")
 	if f.Parse(args) != nil || f.NArg() != 0 || *requestPath == "" || *operations == "" || !digestPattern.MatchString(*captureSHA) || !digestPattern.MatchString(*pauseSHA) {
 		return fail()
 	}
@@ -55,6 +64,10 @@ func runGateway(ctx context.Context, args []string, output, diagnostic io.Writer
 	}
 	stage = "environment"
 	if !controlledEnvironment(os.Environ()) {
+		return fail()
+	}
+	stage = "secret_process"
+	if protectSessionSecrets() != nil {
 		return fail()
 	}
 	files := protectedFiles{uid: 0, boundary: "/"}
@@ -82,7 +95,7 @@ func runGateway(ctx context.Context, args []string, output, diagnostic io.Writer
 		return connectPause(c, "/run/dbus/system_bus_socket", ph)
 	}}
 	h := gatewayHost{proc: "/proc", cgroup: "/sys/fs/cgroup", realFS: true, nginx: "/usr/sbin/nginx", controllerExe: "/opt/nucleus-halo/bin/garm"}
-	g := gatewayStopper{pause: p, producer: producer, admission: lazyAdmission(files, *gh, *ga), connect: func(c context.Context) (gatewayConnection, error) {
+	g := gatewayStopper{pause: p, producer: producer, admission: sessionLiveAdmission(files, *gh, *ga, *sessionSHA), connect: func(c context.Context) (gatewayConnection, error) {
 		return connectGateway(c, "/run/dbus/system_bus_socket", h)
 	}}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)

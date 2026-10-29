@@ -6,7 +6,7 @@
 
 ## 已核源码
 
-领域判断以 2026-10-29 的源码阅读及当前 nftables 消费者的准确字节为依据。新增 firewall 只消费 nftables/netlink，不引入 LXD 客户端、daemon handler 或浏览器接口。已重新核对下列原调用链、完整 14 包集合、模块 checksum 和五份 OSV 内容；这些事实均保持。机器绑定位于 [五项处置记录](scripts/go-vuln-lxd.json)。该记录随 PR 接受独立代码和安全审查；记录本身不是审查已完成的凭证。
+本次领域判断覆盖 [GARM 管理会话窗口](runner/session.md)与已合入的 [原生防火墙](runner/firewall.md)，基线为已合并的 [462d698](https://github.com/headironc/designs/commit/462d698bf544be7c9f406d4bae5d5d71f017f101)。firewall 只消费 nftables/netlink，不引入 LXD 客户端、daemon handler 或浏览器接口。准确 Go 源码与两锁由[五项处置记录](scripts/go-vuln-lxd.json)绑定。记录随本片 PR 接受独立代码和安全审查；领域核定时刻不代表正式审查已完成。
 
 依赖固定为 `github.com/canonical/lxd@v0.0.0-20261012123619-3c94d4fae7ff`。固定 Go 1.27.3、Linux amd64、cgo、`-test -tags=integration` 的实际图仅包含 `client` 和 13 个 `shared` 包。准确包名列在记录中，没有 daemon 的 `lxd` 包和服务端 handler。
 
@@ -15,6 +15,11 @@
 - [provider 观察入口](runner/internal/provider/observations_linux.go)的 `withLXD` 使用显式 Unix socket，禁代理和重定向。`lxdReads` 限制 GET；创建、读取及删除观察复用此入口。实际写操作由独立的 [native provider](runner/internal/provider/native_linux.go) 负责，其安全状态不由该 Go 客户端判断替代。
 - [lifecycle 客户端](runner/internal/lifecycle/machine_linux.go)的 `withMachineClient` 使用相同的 Unix socket 约束。诊断读取实例、卷和 operations，不提供证书管理或浏览器接口。
 - [operations 诊断投影](runner/internal/lifecycle/diagnostic_machine_linux.go)仅提取 ID、状态与位置，不公开完整 metadata 或 WebSocket secret。传递导入 `shared/ws` 不等于业务使用终端劫持入口。实际 daemon 对其他读者的 secret 过滤仍是部署责任。
+- [会话生产准入](runner/internal/lifecycle/session_host_linux.go)使用[会话资源观察](runner/internal/lifecycle/session_machine_linux.go)。新增 GET 覆盖所有 project 的实例、专用池卷及 operations。它复用固定 Unix transport，不调用证书管理或 WebSocket。operations 只投影 ID、状态与位置，形成私有准入摘要。job 和公开报告均不接收完整 metadata。JWT 认证域轮换作用于 GARM，不增加 LXD daemon handler。
+
+本次重新检查了新增生产调用链、依赖锁及选定包图。原始扫描报告仍有五项可达符号告警，原生文本退出 3。当前图仍只有上述 14 个 LXD 包，没有本地非 Go 或 embed 输入。LXD 版本、checksum、工具范围及五项完整 OSV 内容均与记录相符。本次只更新准确源码绑定与核定时刻。逐项结论及 daemon 未核责任保持，不扩大豁免范围。
+
+本片审查修复又核定了窗口永久锁和退役拒绝回执的源码变化。这些变化只影响本地锁创建及原响应持久化和恢复，不新增 LXD 调用、依赖或编译输入。上述 LXD 入口与投影保持，处置记录绑定修复后的准确 Go 源码。
 
 ## 逐项依据
 

@@ -10,6 +10,7 @@ require (
 	github.com/coreos/go-systemd/v22 v22.7.0
 	github.com/go-openapi/runtime v0.29.5
 	github.com/godbus/dbus/v5 v5.2.4
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/go-github/v84 v84.0.0
 	github.com/google/nftables v0.3.0
 	github.com/mdlayher/netlink v1.7.3-0.20250113171957-fbb4dce95f42
@@ -48,7 +49,6 @@ require (
 	github.com/go-openapi/validate v0.25.2 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/golang-jwt/jwt/v4 v4.5.2 // indirect
-	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/go-querystring v1.2.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -60,6 +60,7 @@ require (
 	github.com/mdlayher/socket v0.7.0 // indirect
 	github.com/minio/sio v0.5.1 // indirect
 	github.com/muhlemmer/gu v0.3.1 // indirect
+	github.com/nbutton23/zxcvbn-go v0.0.0-20210217022336-fa2cb2858354 // indirect
 	github.com/ncruces/go-strftime v1.1.0 // indirect
 	github.com/oklog/ulid/v2 v2.1.2 // indirect
 	github.com/pkg/errors v0.9.1 // indirect

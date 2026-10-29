@@ -99,7 +99,7 @@ func openPauseStore(files protectedFiles, parent string, createLock bool) (*paus
 	return &pauseStore{s}, nil
 }
 
-func openServiceFiles(files protectedFiles, parent, slotName, lockName string, createLock bool) (*serviceFiles, error) {
+func openServiceFiles(files protectedFiles, parent, slotName, lockName string, createLock bool, relatedSlots ...string) (*serviceFiles, error) {
 	if files.parents(filepath.Join(parent, "unused")) != nil {
 		return nil, errRefused
 	}
@@ -113,14 +113,15 @@ func openServiceFiles(files protectedFiles, parent, slotName, lockName string, c
 		return fail()
 	}
 	flags, mode := unix.O_RDONLY, uint32(0)
-	var slot unix.Stat_t
-	statErr := unix.Fstatat(int(dir.Fd()), slotName, &slot, unix.AT_SYMLINK_NOFOLLOW)
-	if statErr != nil && !errors.Is(statErr, unix.ENOENT) {
-		return fail()
-	}
-	occupied := statErr == nil
-	if createLock && occupied {
-		createLock = false
+	for _, name := range append([]string{slotName}, relatedSlots...) {
+		var slot unix.Stat_t
+		statErr := unix.Fstatat(int(dir.Fd()), name, &slot, unix.AT_SYMLINK_NOFOLLOW)
+		if statErr != nil && !errors.Is(statErr, unix.ENOENT) {
+			return fail()
+		}
+		if statErr == nil {
+			createLock = false
+		}
 	}
 	if createLock {
 		flags = unix.O_RDWR | unix.O_CREAT | unix.O_EXCL
@@ -152,6 +153,32 @@ func (s *serviceFiles) close() {
 	if s.parent != nil {
 		s.parent.Close()
 	}
+}
+
+// A credential window and its one login share an already-held global lock.
+// Duplicating the open description preserves that lease without a second flock.
+func (s *serviceFiles) sibling(slot string) (*serviceFiles, error) {
+	if slot != "window" || !s.unchanged() {
+		return nil, errRefused
+	}
+	other := &serviceFiles{files: s.files, path: filepath.Join(filepath.Dir(s.path), slot), lockPath: s.lockPath, raw: map[string][]byte{}, pinned: map[string]*os.File{}}
+	duplicate := func(f *os.File) (*os.File, error) {
+		fd, err := unix.FcntlInt(f.Fd(), unix.F_DUPFD_CLOEXEC, 0)
+		if err != nil {
+			return nil, err
+		}
+		return os.NewFile(uintptr(fd), f.Name()), nil
+	}
+	var err error
+	other.parent, err = duplicate(s.parent)
+	if err == nil {
+		other.lock, err = duplicate(s.lock)
+	}
+	if err != nil || !other.unchanged() {
+		other.close()
+		return nil, errRefused
+	}
+	return other, nil
 }
 func (s *serviceFiles) unchanged() bool {
 	info, err := s.lock.Stat()

@@ -57,7 +57,7 @@ func machineResponder(t *testing.T, respond func(*http.Request) (string, bool)) 
 			http.Error(w, "write", 500)
 			return
 		}
-		allProjectsInventory := (r.URL.Path == "/1.0/instances" || r.URL.Path == "/1.0/storage-pools/halo-ci/volumes") && r.URL.Query().Get("all-projects") == "true"
+		allProjectsInventory := (r.URL.Path == "/1.0/instances" || r.URL.Path == "/1.0/storage-pools/halo-ci/volumes" || r.URL.Path == "/1.0/operations") && r.URL.Query().Get("all-projects") == "true"
 		if r.URL.Path != "/1.0" && r.URL.Query().Get("project") != "halo-ci" && !allProjectsInventory {
 			t.Errorf("missing project binding on %s", r.URL)
 		}

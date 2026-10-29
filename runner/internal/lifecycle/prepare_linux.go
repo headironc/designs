@@ -183,6 +183,14 @@ func (p prepareReader) releaseObservation(s *prepareFiles) (prepareReleaseObserv
 }
 
 func (p prepareReader) observe(ctx context.Context, producer string) prepareReport {
+	report, _ := p.observeWithLease(ctx, producer, nil)
+	return report
+}
+
+// A credential window consumes the same historical observation while retaining
+// the original owner lock and pinned records. It supplies its own operation
+// authorization; this observation still does not close or restart old work.
+func (p prepareReader) observeWithLease(ctx context.Context, producer string, consume func(prepareReport, func() error) error) (prepareReport, error) {
 	out := prepareReport{Version: 1, Operation: prepareOperation, Amendment: prepareAmendment, ReleaseSHA: p.releaseSHA, PlanSHA: p.planSHA, BootstrapSHA: prepareBootstrapSHA, ObserverSHA: producer, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), State: "unknown", Lock: prepareUnknown("owner_lock_unavailable"), AmendmentDirectory: prepareUnknown("amendment_unavailable"), ServicesDirectory: prepareUnknown("services_unavailable"), Publication: prepareUnknown("records_incomplete"), CrossBinding: prepareUnknown("binding_unavailable"), BeforeHash: prepareUnknown("before_hash_unavailable"), Current: "not_observed_this_slice", Pending: []prepareMemberStatus{}, Gaps: []string{"historical_producer_execution_unproven", "service_prestate_original_digest_missing", "external_preflight_not_reperformed", "credentials_not_decrypted_or_used", "current_installed_prestate_not_observed"}}
 	paths := []string{"repair.intent.json", "before.json", "services/service-binding.json", "services/services-before.json", "prepare.complete.json"}
 	for _, name := range paths {
@@ -191,7 +199,7 @@ func (p prepareReader) observe(ctx context.Context, producer string) prepareRepo
 	if !digestPattern.MatchString(producer) {
 		out.ObserverSHA = ""
 		out.Publication = prepareUnknown("observer_producer_unavailable")
-		return out
+		return out, errRefused
 	}
 	r := newPrepareFiles(p.files)
 	defer r.close()
@@ -199,7 +207,7 @@ func (p prepareReader) observe(ctx context.Context, producer string) prepareRepo
 	out.Release, plan = p.releaseObservation(r)
 	s := newPrepareFiles(p.files)
 	defer s.close()
-	finish := func() prepareReport {
+	finish := func() (prepareReport, error) {
 		if p.beforeRecheck != nil {
 			p.beforeRecheck()
 		}
@@ -220,7 +228,22 @@ func (p prepareReader) observe(ctx context.Context, producer string) prepareRepo
 			out.State = "unknown"
 			out.Publication = prepareUnknown("observation_cancelled")
 		}
-		return out
+		if consume == nil {
+			return out, nil
+		}
+		if out.Lock.State != "observed" {
+			return out, errRefused
+		}
+		recheck := func() error {
+			if !r.unchanged(ctx) || !s.unchanged(ctx) {
+				return errRefused
+			}
+			return nil
+		}
+		if recheck() != nil {
+			return out, errRefused
+		}
+		return out, consume(out, recheck)
 	}
 	parent, e := s.open(p.parent, true, 0700, false)
 	if e != nil || parent == nil {

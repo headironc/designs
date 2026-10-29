@@ -1,6 +1,6 @@
 # Runner Go 实现
 
-已交付专用防火墙重载、[guest bootstrap](bootstrap.md)、[provider 异常停接](watchdog.md)、[Go guard 正常启动准入](startup.md)、[guard watchdog 检查与状态持久化](guard-watchdog.md)、[单次 VM 创建](create.md)、[VM 删除与容量释放](delete.md)、[provider 正常只读协议](read.md)、[原执行身份采集](execution.md)、[闭合诊断](closure.md)、[watchdog 暂停](pause.md)、[gateway 停止](gateway.md)、[历史 prepare 原件观察](prepare-evidence.md)和 [当前安装文件比对](installed-evidence.md)。异常停接已接入 GARM client 与 go-systemd，包含原停止 job 恢复。诊断分别报告 job 结论、资源事实和证据缺口，不签发清理许可。已采用的 Go 包及后续接入边界见 [架构选型](architecture.md#已采用的-go-包)。防火墙入口使用 [原生 nftables 事务](firewall.md)；源码验收与实际服务切换分别执行。
+已交付专用防火墙重载、[guest bootstrap](bootstrap.md)、[provider 异常停接](watchdog.md)、[Go guard 正常启动准入](startup.md)、[guard watchdog 检查与状态持久化](guard-watchdog.md)、[单次 VM 创建](create.md)、[VM 删除与容量释放](delete.md)、[provider 正常只读协议](read.md)、[原执行身份采集](execution.md)、[闭合诊断](closure.md)、[watchdog 暂停](pause.md)、[gateway 停止](gateway.md)、[历史 prepare 原件观察](prepare-evidence.md)和 [当前安装文件比对](installed-evidence.md)。本片新增 [GARM 管理会话窗口](session.md)，覆盖认证域轮换、单次登录、受管消费和到期退役。异常停接已接入 GARM client 与 go-systemd，包含原停止 job 恢复。诊断分别报告 job 结论、资源事实和证据缺口，不签发清理许可。已采用的 Go 包及后续接入边界见 [架构选型](architecture.md#已采用的-go-包)。防火墙入口使用 [原生 nftables 事务](firewall.md)；源码验收与实际服务切换分别执行。
 
 `runner-firewall` 供 `nucleiron-firewall.service` 的启动与重载使用。零参数入口读取 root 所有、模式 `0600` 的 `/etc/nucleiron-gateway/firewall.json`。纯 `render-config` 子命令输出当前版本的非敏感 JSON；服务不接受 nft 文本或 CLI fallback。
 

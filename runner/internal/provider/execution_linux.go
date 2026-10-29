@@ -75,28 +75,7 @@ func (s startup) inspectExecution(ctx context.Context, observe func(ExecutionBin
 		}
 		binding := ExecutionBinding{p.Controller, p.Repository, p.ScaleSet, p.Pool, p.Image, active.Name, active.UUID, *active.AgentID, fmt.Sprintf("%x", sha256.Sum256(g.raw)), fmt.Sprintf("%x", sha256.Sum256(g.policy)), p.ProviderSHA, p.ConfigSHA}
 		recheck := func() error {
-			if ctx.Err() != nil || !g.unchanged() || absent(s.maintenance) != nil {
-				return errRefused
-			}
-			for _, name := range []string{"state.pending", "state.new"} {
-				if absentAt(g.dir, name) != nil {
-					return errRefused
-				}
-			}
-			for _, file := range []struct {
-				path      string
-				uid, mode uint32
-				raw       []byte
-			}{{s.policy, s.rootUID, 0644, g.policy}, {s.state + "/state.json", s.serviceUID, 0600, g.raw}} {
-				raw, err := readPath(file.path, file.uid, file.mode, 64*1024)
-				if err != nil || !bytes.Equal(raw, file.raw) {
-					return errRefused
-				}
-			}
-			if metadata(g.dir, s.serviceUID, unix.S_IFDIR|0700) != nil || metadata(g.lock, s.serviceUID, unix.S_IFREG|0600) != nil || checkDigest(s.native, s.rootUID, 0755, p.ProviderSHA) != nil || checkDigest(s.config, s.rootUID, 0644, p.ConfigSHA) != nil {
-				return errRefused
-			}
-			return nil
+			return g.recheck(ctx, p)
 		}
 		if recheck() != nil {
 			return errRefused
@@ -115,6 +94,80 @@ func (s startup) inspectExecution(ctx context.Context, observe func(ExecutionBin
 			return ctx.Err()
 		}
 		return publish()
+	})
+	return err
+}
+
+func (g *guardFiles) recheck(ctx context.Context, p readPolicy) error {
+	s := g.s
+	if ctx.Err() != nil || !g.unchanged() || absent(s.maintenance) != nil {
+		return errRefused
+	}
+	for _, name := range []string{"state.pending", "state.new"} {
+		if absentAt(g.dir, name) != nil {
+			return errRefused
+		}
+	}
+	for _, file := range []struct {
+		path      string
+		uid, mode uint32
+		raw       []byte
+	}{{s.policy, s.rootUID, 0644, g.policy}, {s.state + "/state.json", s.serviceUID, 0600, g.raw}} {
+		raw, err := readPath(file.path, file.uid, file.mode, 64*1024)
+		if err != nil || !bytes.Equal(raw, file.raw) {
+			return errRefused
+		}
+	}
+	if metadata(g.dir, s.serviceUID, unix.S_IFDIR|0700) != nil || metadata(g.lock, s.serviceUID, unix.S_IFREG|0600) != nil || checkDigest(s.native, s.rootUID, 0755, p.ProviderSHA) != nil || checkDigest(s.config, s.rootUID, 0644, p.ConfigSHA) != nil {
+		return errRefused
+	}
+	return nil
+}
+
+// WithIdleController retains the original provider files during credential
+// maintenance. start releases the lock once for the controller's startup check,
+// waits through the supplied original job observer, then reacquires and checks
+// the unchanged guard. A vacant guard alone does not prove resource closure.
+func WithIdleController(ctx context.Context, controller string, observe func(check func() error, start func(func() error) error) error) error {
+	s, err := administrativePaths()
+	if err != nil {
+		return err
+	}
+	return s.withIdleController(ctx, controller, observe)
+}
+
+func (s startup) withIdleController(ctx context.Context, controller string, observe func(check func() error, start func(func() error) error) error) error {
+	_, err := s.withState(func(g *guardFiles) error {
+		var p readPolicy
+		var state guardState
+		if observe == nil || !uuid.MatchString(controller) || decodeObject(g.policy, &p, true) != nil || !p.valid() || p.Controller != controller || !normalState(g.raw) || decodeObject(g.raw, &state, false) != nil || !isNull(state.Active) {
+			return errRefused
+		}
+		recheck := func() error { return g.recheck(ctx, p) }
+		if recheck() != nil {
+			return errRefused
+		}
+		yielded := false
+		start := func(action func() error) error {
+			if yielded || action == nil || recheck() != nil {
+				return errRefused
+			}
+			yielded = true
+			if unix.Flock(int(g.lock.Fd()), unix.LOCK_UN) != nil {
+				return errRefused
+			}
+			result := action()
+			// Reacquire even when the job observer failed or its wait expired.
+			// Failure here retains the original window; it grants no retry.
+			if unix.Flock(int(g.lock.Fd()), unix.LOCK_EX|unix.LOCK_NB) != nil || recheck() != nil {
+				return errRefused
+			}
+			return result
+		}
+		if err := observe(recheck, start); err != nil {
+			return err
+		}
+		return recheck()
 	})
 	return err
 }

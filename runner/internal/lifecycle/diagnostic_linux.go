@@ -149,6 +149,7 @@ func runDiagnostic(ctx context.Context, args []string, output, diagnostic io.Wri
 	captureSHA := f.String("capture-sha256", "", "trusted original producer digest")
 	ghPath := f.String("github-token-file", "", "existing credential")
 	gaPath := f.String("garm-token-file", "", "existing credential")
+	sessionSHA := f.String("garm-session-sha256", "", "trusted producer of a managed GARM session")
 	pauseSHA := f.String("pause-sha256", "", "trusted original pause producer")
 	gatewaySHA := f.String("gateway-sha256", "", "trusted original gateway stop producer")
 	if f.Parse(args) != nil || f.NArg() != 0 || *requestPath == "" || *operations == "" || !digestPattern.MatchString(*captureSHA) || *ghPath == "" || *gaPath == "" {
@@ -166,6 +167,10 @@ func runDiagnostic(ctx context.Context, args []string, output, diagnostic io.Wri
 	}
 	stage = "environment"
 	if !controlledEnvironment(os.Environ()) {
+		return fail()
+	}
+	stage = "secret_process"
+	if protectSessionSecrets() != nil {
 		return fail()
 	}
 	p := protectedFiles{uid: 0, boundary: "/"}
@@ -195,11 +200,15 @@ func runDiagnostic(ctx context.Context, args []string, output, diagnostic io.Wri
 	if err != nil {
 		return fail()
 	}
-	ga, err := p.read(*gaPath, 0600, 64*1024+1)
+	credential, err := loadGARMToken(p, *gaPath, sessionParent, *sessionSHA, time.Now())
 	if err != nil {
 		return fail()
 	}
-	ghToken, gaToken := strings.TrimSpace(string(gh)), strings.TrimSpace(string(ga))
+	defer credential.close()
+	if credential.controller != "" && credential.controller != original.Expected.Controller {
+		return fail()
+	}
+	ghToken, gaToken := strings.TrimSpace(string(gh)), credential.token
 	if !validToken(ghToken) || !validToken(gaToken) {
 		return fail()
 	}
