@@ -168,6 +168,10 @@ type platforms struct {
 }
 
 func newPlatforms(gh, ga string, fixture http.RoundTripper) *platforms {
+	return credentialPlatforms(gh, ga, fixture, nil, nil)
+}
+
+func credentialPlatforms(gh, ga string, fixture http.RoundTripper, observer, session *sessionCredential) *platforms {
 	p := &platforms{token: ga}
 	client := func(scheme, host string) *http.Client {
 		base := fixture
@@ -177,7 +181,15 @@ func newPlatforms(gh, ga string, fixture http.RoundTripper) *platforms {
 			p.transports = append(p.transports, transport)
 			base = transport
 		}
-		return &http.Client{Transport: readTransport{base, scheme, host}, Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errRefused }}
+		credential := session
+		if host == "api.github.com" {
+			credential = observer
+		}
+		var wire http.RoundTripper = readTransport{base, scheme, host}
+		if credential != nil && credential.store != nil {
+			wire = credentialTransport{base: wire, credential: credential, now: time.Now}
+		}
+		return &http.Client{Transport: wire, Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errRefused }}
 	}
 	p.github = github.NewClient(client("https", "api.github.com")).WithAuthToken(gh)
 	rt := httptransport.NewWithClient("127.0.0.1:9997", "/api/v1", []string{"http"}, client("http", "127.0.0.1:9997"))

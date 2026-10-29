@@ -233,6 +233,8 @@ func TestDatabaseChildHelper(t *testing.T) {
 		os.Exit(databaseWorker(context.Background(), nil, os.Stdin, os.Stdout))
 	case "session-worker":
 		os.Exit(sessionDatabaseWorker(context.Background(), nil, os.Stdin, os.Stdout))
+	case "observer-worker":
+		os.Exit(observerDatabaseWorker(context.Background(), nil, os.Stdin, os.Stdout))
 	case "identity":
 		groups, _ := os.Getgroups()
 		sha, err := runningDigest()
@@ -352,6 +354,29 @@ func TestDatabaseChildInPrivateContainer(t *testing.T) {
 	}
 	if _, err := db.Exec("UPDATE scale_sets SET enabled=0"); err != nil {
 		t.Fatal(err)
+	}
+	observerPlan := observerDatabaseFixtureRows(t, db, p)
+	observerInput, _ := json.Marshal(observerDatabaseRequest{observerPlan, p})
+	walBefore, _ = os.ReadFile(files.path + "-wal")
+	observerRaw, err := runDatabaseProcess(context.Background(), "/proc/self/exe", args("observer-worker"), observerInput, uid, gid)
+	var observer observerDatabase
+	if err != nil || strictObject(observerRaw, &observer) != nil || observer.UID != uid || observer.GID != gid || observer.Groups == nil || len(observer.Groups) != 0 || observer.Producer != expected || observer.Session.Controller != p.Controller || bytesSHA(observer.Payload) != observerPlan.PayloadSHA || !digestPattern.MatchString(observer.Identity) {
+		t.Fatal("actual GitHub observer identity/WAL failed", err)
+	}
+	clear(observerRaw)
+	clear(observer.Payload)
+	walAfter, _ = os.ReadFile(files.path + "-wal")
+	if !bytes.Equal(walBefore, walAfter) {
+		t.Fatal("GitHub observer wrote WAL")
+	}
+	if _, err := runDatabaseProcess(context.Background(), "/proc/self/exe", args("observer-worker"), observerInput, uid+1, gid); err == nil {
+		t.Fatal("wrong GitHub observer identity accepted")
+	}
+	if _, err := db.Exec("UPDATE github_credentials SET auth_type='pat'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runDatabaseProcess(context.Background(), "/proc/self/exe", args("observer-worker"), observerInput, uid, gid); err == nil {
+		t.Fatal("PAT source accepted by actual child")
 	}
 	for _, mode := range []string{"oversize", "wait"} {
 		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)

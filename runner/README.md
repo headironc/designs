@@ -6,6 +6,8 @@
 
 程序通过 `google/nftables` 在单次 batch 中删除并重建 `inet nucleiron` 和 `bridge nucleiron`。配置只允许既有 bridge、IPv4 子网、gateway 和四个 TCP 端口，不能由工作流或 guest 提供。新实现保留最终网络策略、域名及路由；其他表保持。永久锁、原意图、读回及归档由 `/var/lib/nucleiron-firewall` 内的独立记录维护。
 
+[GitHub 只读观察凭据](github-observer.md)为 capture、diagnose、pause 和 gateway 提供单次 installation token 供应、受管读取及原 token 退役恢复。入口消费已有 GARM 会话，不再次登录；源码与隔离检查不执行真实凭据或接入操作。
+
 ## 构建与检查
 
 仓库完整验收使用根目录的 [Go 检查入口](../README.md#go-检查)。本地与原生 CI 运行相同三层检查，包含 race、五个命令构建、私有降权容器和 nft namespace。下文保留各能力的底层命令及运行边界。

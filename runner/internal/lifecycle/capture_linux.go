@@ -276,6 +276,15 @@ func (c capture) execute(ctx context.Context, requestPath, operations string) (s
 // Run exposes a fixed production observation route. Test endpoints and fixture
 // roots are private implementation inputs, never flags or environment settings.
 func Run(ctx context.Context, args []string, output, diagnostic io.Writer) int {
+	if len(args) > 0 && args[0] == "acquire-github-observer" {
+		return runObserver(ctx, args[1:], false, output, diagnostic)
+	}
+	if len(args) > 0 && args[0] == "retire-github-observer" {
+		return runObserver(ctx, args[1:], true, output, diagnostic)
+	}
+	if len(args) > 0 && args[0] == "--github-observer-database" {
+		return observerDatabaseWorker(ctx, args[1:], os.Stdin, output)
+	}
 	if len(args) > 0 && args[0] == "acquire-garm-session" {
 		return runSession(ctx, args[1:], false, output, diagnostic)
 	}
@@ -318,6 +327,7 @@ func Run(ctx context.Context, args []string, output, diagnostic io.Writer) int {
 	githubCredential := f.String("github-token-file", "", "existing read-only credential")
 	garmCredential := f.String("garm-token-file", "", "existing read-only credential")
 	sessionSHA := f.String("garm-session-sha256", "", "trusted producer of a managed GARM session")
+	observerSHA := f.String("github-observer-sha256", "", "trusted producer of a managed GitHub observer")
 	if f.Parse(args[1:]) != nil || f.NArg() != 0 || *requestPath == "" || *operations == "" || *githubCredential == "" || *garmCredential == "" {
 		return fail()
 	}
@@ -338,25 +348,31 @@ func Run(ctx context.Context, args []string, output, diagnostic io.Writer) int {
 	defer cancel()
 	var p *platforms
 	var credential *sessionCredential
+	var observer *sessionCredential
 	defer func() {
 		if p != nil {
 			p.close()
 		}
 		credential.close()
+		observer.close()
 	}()
 	loadCredentials := func() error {
-		gh, err := files.read(*githubCredential, 0600, 64*1024+1)
-		if err != nil || !validToken(strings.TrimSpace(string(gh))) {
+		var err error
+		observer, err = loadGitHubToken(files, *githubCredential, sessionParent, *observerSHA, time.Now())
+		if err != nil {
 			return errRefused
 		}
 		credential, err = loadGARMToken(files, *garmCredential, sessionParent, *sessionSHA, time.Now())
 		if err != nil {
 			return errRefused
 		}
-		p = newPlatforms(strings.TrimSpace(string(gh)), credential.token, nil)
+		p = credentialPlatforms(observer.token, credential.token, nil, observer, credential)
 		return nil
 	}
 	observe := func(ctx context.Context, r request, b provider.ExecutionBinding) (int, error) {
+		if !observer.accepts(r) {
+			return 0, errRefused
+		}
 		if credential.controller != "" && credential.controller != r.Controller {
 			return 0, errRefused
 		}
