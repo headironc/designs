@@ -337,9 +337,13 @@ func setupPacketFixture(t *testing.T) packetFixture {
 	privateIP(t, "address", "add", "10.203.64.1/24", "dev", "nucleiron0")
 	privateIP(t, "address", "add", "10.203.64.254/24", "dev", "nucleiron0")
 	privateIP(t, "-6", "address", "add", "fd00:203:64::1/64", "dev", "nucleiron0", "nodad")
+	// Forwarded packets need a usable router link-local source for neighbor
+	// solicitation; automatically generated addresses are still tentative.
+	privateIP(t, "-6", "address", "add", "fe80::1/64", "dev", "nucleiron0", "nodad")
 	f := packetFixture{guest: startPacketProcess(t, "guest", "guestlink"), peer: startPacketProcess(t, "peer", "peerlink"), outside: startPacketProcess(t, "outside", "outsidelink")}
 	privateIP(t, "address", "add", "10.204.0.1/24", "dev", "outsidelink")
 	privateIP(t, "-6", "address", "add", "fd00:204::1/64", "dev", "outsidelink", "nodad")
+	privateIP(t, "-6", "address", "add", "fe80::1/64", "dev", "outsidelink", "nodad")
 	privateIP(t, "route", "add", "10.203.65.2/32", "via", "10.203.64.2", "dev", "nucleiron0")
 	if err := os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1\n"), 0); err != nil {
 		t.Fatal(err)
