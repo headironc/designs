@@ -9,6 +9,9 @@ Conflicts=shutdown.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+StateDirectory=nucleiron-firewall
+StateDirectoryMode=0700
+UMask=0077
 ExecStart=/opt/nucleus-halo/bin/runner-firewall
 ExecReload=/opt/nucleus-halo/bin/runner-firewall
 # Stopping the unit deliberately retains the protective rules.

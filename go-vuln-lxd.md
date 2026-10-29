@@ -6,7 +6,7 @@
 
 ## 已核源码
 
-本次领域判断覆盖 [GARM 管理会话窗口](runner/session.md)候选，基线为已合并的 [81dafd0](https://github.com/headironc/designs/commit/81dafd091e96e9acb9dee0c4df1e96c01565a45c)。准确 Go 源码与两锁由[五项处置记录](scripts/go-vuln-lxd.json)绑定。记录随本片 PR 接受独立代码和安全审查；领域核定时刻不代表正式审查已完成。
+本次领域判断覆盖 [GARM 管理会话窗口](runner/session.md)与已合入的 [原生防火墙](runner/firewall.md)，基线为已合并的 [462d698](https://github.com/headironc/designs/commit/462d698bf544be7c9f406d4bae5d5d71f017f101)。firewall 只消费 nftables/netlink，不引入 LXD 客户端、daemon handler 或浏览器接口。准确 Go 源码与两锁由[五项处置记录](scripts/go-vuln-lxd.json)绑定。记录随本片 PR 接受独立代码和安全审查；领域核定时刻不代表正式审查已完成。
 
 依赖固定为 `github.com/canonical/lxd@v0.0.0-20261012123619-3c94d4fae7ff`。固定 Go 1.27.3、Linux amd64、cgo、`-test -tags=integration` 的实际图仅包含 `client` 和 13 个 `shared` 包。准确包名列在记录中，没有 daemon 的 `lxd` 包和服务端 handler。
 

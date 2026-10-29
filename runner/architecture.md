@@ -84,7 +84,7 @@ SDK 接入保留现有超时、代理、重定向、响应上限和精确整数�
 
 ### 防火墙接入 nftables 包
 
-已合入的 firewall 读取 nft 文本并调用 CLI，具体行为见 [当前实现](README.md)。目标实现改用 `google/nftables`，不保留 CLI fallback。该包不承担 nft 文本解析；部署能力提供仅覆盖当前受管规则的结构化配置，firewall 校验配置并生成规则。配置生成、消费、unit 绑定与切换说明在同一实施片交付，不先建设通用规则语言或解析框架。
+原 firewall 读取 nft 文本并调用 CLI。本片改用 `google/nftables v0.3.0` 和 `mdlayher/netlink`，具体入口与恢复见 [原生防火墙](firewall.md)，不保留 CLI fallback。该包不承担 nft 文本解析；纯配置生产入口输出仅覆盖当前受管规则的 JSON，firewall 校验配置并生成规则。配置生成、消费、unit 绑定与切换说明在同一实施片交付，不先建设通用规则语言或解析框架。
 
 迁移片保持现有端口、地址、域名对应的网络策略及路由边界。存在性读取完成后，将自有表删除与重建放在一次 netlink batch 中。仅替换 `inet nucleiron` 与 `bridge nucleiron`，其他表保持。配置错误在发送前拒绝；内核拒绝 batch 时原规则保持。发送后超时或回执丢失保留未知结果，先核实际表状态，不重发。
 
@@ -145,7 +145,7 @@ guard 的共享 policy 拥有 `controller_id`、`repository_id`、`scaleset_name
 | [records-only 维护窗口](records-recovery.md)           | 在准确许可下清理原 GARM 遗留记录，并回到停止且停接的状态                | 签发、原 job 启动准入、维护读取、清理、停止、guard 恢复和许可退役；不迁用旧许可，不含正常服务恢复或启用接单                           |
 | watchdog GARM 客户端接入（已合入）                     | 原停接流程通过 GARM client 完成同一准确目标禁用与读回                   | 保留身份、输入、时限、未知登录和禁用请求边界；不同时改造 systemd 停止恢复                                                             |
 | watchdog systemd 停止与恢复（已合入）                  | 一次停止请求具有可追踪的原 job 与终态核验                               | go-systemd 订阅、写前记录、原 job 回执及 unit/进程/cgroup 核验；丢失终态不补造成功，旧 CLI 记录保全拒绝自动迁移，不重新接入或部署     |
-| nftables 包接入                                        | 结构化部署配置经 Go 包原子替换自有表                                    | 配置生成与校验、netlink、unit 消费和隔离验收；不改变网络策略，不保留 CLI fallback                                                     |
+| [nftables 包接入](firewall.md)（本片）                 | 结构化部署配置经 Go 包原子替换自有表                                    | 配置生成与校验、netlink、unit 消费和隔离验收；不改变网络策略，不保留 CLI fallback                                                     |
 | 服务与版本安装窗口                                     | 在准确前态中停止服务、安装一个版本，并恢复或保留可恢复状态              | systemd 原 job、文件事务、回滚与配置漂移检查；不将通用文件复制单独提前交付                                                            |
 | 凭据消费与连接                                         | 一次已绑定操作建立并验证 disabled 连接，故障后保留可解释结果            | signer、凭据证明、受保护记录、repository/ScaleSet 回执及只读恢复；稳定 rebind 到达后再确定最小闭包                                    |
 | VM 终态与恢复                                          | 对一个准确 job 区分用例通过和仅资源回收，并验证资源归零                 | GitHub/GARM/LXD/进程/cgroup 证据和必要服务恢复；四种任务终态按实际接口验证，不冒充生产全验收                                          |
