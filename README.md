@@ -1,12 +1,13 @@
 # Designs
 
-本仓库维护跨仓库设计和 [runner 自有 Go 实现](runner/README.md)。agents、Nucleus 与 designs 分别维护原生 CI 和业务检查。旧共享执行器、固定配方和自动准入已退役，新 CI 从零建立。
+本仓库维护跨仓库设计及[已有 runner Go 程序](runner/README.md)。正常运行采用 GARM 与上游 LXD provider，具体版本、职责及迁移边界见[精简架构](runner/architecture.md)。agents、Nucleus 与 designs 分别维护原生 CI 和业务检查。旧共享执行器、固定配方和自动准入已退役。
 
 ## 当前设计
 
-- [CI 与运行边界](ci-architecture.md)：原生 CI、独立审查、分支保护和发布入口的职责；保留 runner 与 Kiln 的资源隔离及恢复要求。
+- [CI 与运行边界](ci-architecture.md)：原生 CI、独立审查、分支保护和发布职责；清理异常由运行侧停接和告警处理。
 - [Rust 与 Halo 共用 runner](ci-architecture.md#runner-与-kiln)：共用基础设施、两层镜像、不可信池边界、生命周期、缓存和接入验收；文档收录不表示已部署。
-- [Runner 的 Go 结构与实施切片](runner/architecture.md)：自有代码职责、已采用的 Go 包、协议与恢复边界，以及小 PR 顺序。[单次 VM 创建](runner/create.md)与 [VM 删除](runner/delete.md)保留准确目标、写前记录和未知结果不重发语义，删除确认后才释放 provider 容量。[正常读取](runner/read.md)核验版本与绑定实例，保持 guard 记录。
+- [Runner 精简架构与迁移边界](runner/architecture.md)：GARM v0.2.1 + 上游 LXD provider v0.1.5 承担正常生命周期，GitHub job container 使用固定 Kiln；保留最小配置、镜像和消费适配。
+- [历史恢复协议](runner/records-recovery.md)：旧自研执行的完整闭合、原身份和 unknown 合同。已有 Go 程序继续保全，不再充当新正常运行的默认前置。
 
 ## 设计与实施
 

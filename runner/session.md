@@ -1,5 +1,7 @@
 # GARM 管理会话窗口
 
+本文保留自有管理入口及其原凭据、记录和 unknown 合同。新的[正常运维路径](architecture.md)使用标准 GARM 配置、API/CLI，不依赖该自有窗口或状态机。
+
 `runner-admin acquire-garm-session` 在停接窗口轮换 GARM JWT 密钥，固定 24 小时 TTL，再登录一次。成功后，现有 Go 管理入口消费同一份受管 token。`retire-garm-session` 在到期后保存服务端拒绝证据，再移除派生 token 文件。两个入口都保留原操作身份和 unknown，不自动恢复接单。
 
 本能力只覆盖 GARM 管理会话。GitHub 的其他凭据由各自供应者负责，包括 installation、registration 和 Actions admin 凭据。源码合并不执行服务切换、密钥轮换或登录。现场操作按准确运行方案授权，方案绑定前态、影响范围和恢复办法。
