@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"reflect"
-	"strings"
 	"time"
 
 	"github.com/headironc/designs/runner/internal/provider"
@@ -150,6 +149,7 @@ func runDiagnostic(ctx context.Context, args []string, output, diagnostic io.Wri
 	ghPath := f.String("github-token-file", "", "existing credential")
 	gaPath := f.String("garm-token-file", "", "existing credential")
 	sessionSHA := f.String("garm-session-sha256", "", "trusted producer of a managed GARM session")
+	observerSHA := f.String("github-observer-sha256", "", "trusted producer of a managed GitHub observer")
 	pauseSHA := f.String("pause-sha256", "", "trusted original pause producer")
 	gatewaySHA := f.String("gateway-sha256", "", "trusted original gateway stop producer")
 	if f.Parse(args) != nil || f.NArg() != 0 || *requestPath == "" || *operations == "" || !digestPattern.MatchString(*captureSHA) || *ghPath == "" || *gaPath == "" {
@@ -196,8 +196,12 @@ func runDiagnostic(ctx context.Context, args []string, output, diagnostic io.Wri
 		return fail()
 	}
 	stage = "credential"
-	gh, err := p.read(*ghPath, 0600, 64*1024+1)
+	observer, err := loadGitHubToken(p, *ghPath, sessionParent, *observerSHA, time.Now())
 	if err != nil {
+		return fail()
+	}
+	defer observer.close()
+	if !observer.accepts(original.Expected) {
 		return fail()
 	}
 	credential, err := loadGARMToken(p, *gaPath, sessionParent, *sessionSHA, time.Now())
@@ -208,11 +212,11 @@ func runDiagnostic(ctx context.Context, args []string, output, diagnostic io.Wri
 	if credential.controller != "" && credential.controller != original.Expected.Controller {
 		return fail()
 	}
-	ghToken, gaToken := strings.TrimSpace(string(gh)), credential.token
+	ghToken, gaToken := observer.token, credential.token
 	if !validToken(ghToken) || !validToken(gaToken) {
 		return fail()
 	}
-	platform := newPlatforms(ghToken, gaToken, nil)
+	platform := credentialPlatforms(ghToken, gaToken, nil, observer, credential)
 	defer platform.close()
 	d := diagnostician{job: platform.diagnoseJob, registration: platform.diagnoseRegistration, garm: platform.diagnoseGARM, machine: func(c context.Context, r receipt) machineObservation {
 		return diagnoseMachine(c, "/var/snap/lxd/common/lxd/unix.socket", r)

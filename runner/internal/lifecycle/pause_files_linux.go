@@ -158,7 +158,7 @@ func (s *serviceFiles) close() {
 // A credential window and its one login share an already-held global lock.
 // Duplicating the open description preserves that lease without a second flock.
 func (s *serviceFiles) sibling(slot string) (*serviceFiles, error) {
-	if slot != "window" || !s.unchanged() {
+	if slot != "window" && slot != "session" && slot != "github-observer" || !s.unchanged() {
 		return nil, errRefused
 	}
 	other := &serviceFiles{files: s.files, path: filepath.Join(filepath.Dir(s.path), slot), lockPath: s.lockPath, raw: map[string][]byte{}, pinned: map[string]*os.File{}}

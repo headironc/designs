@@ -12,6 +12,7 @@ import (
 type sessionCredential struct {
 	token, controller string
 	store             *serviceFiles
+	expires           int64
 }
 
 func (c *sessionCredential) close() {
@@ -53,10 +54,24 @@ func loadGARMToken(files protectedFiles, path, parent, producer string, now time
 	if err != nil || metadata(dir, files.uid, unix.S_IFDIR|0700) != nil || metadata(s.lock, files.uid, unix.S_IFREG|0600) != nil || unix.Flock(int(s.lock.Fd()), unix.LOCK_SH|unix.LOCK_NB) != nil || !s.unchanged() {
 		return nil, errRefused
 	}
+	credential, err := readManagedGARM(s, producer, now)
+	if err != nil {
+		return nil, errRefused
+	}
+	accepted = true
+	return credential, nil
+}
+
+// The caller already owns the shared or exclusive lease. In particular a
+// supplier's duplicated exclusive description must never be flock-converted.
+func readManagedGARM(s *serviceFiles, producer string, now time.Time) (*sessionCredential, error) {
+	if !digestPattern.MatchString(producer) {
+		return nil, errRefused
+	}
 	if exists, err := s.existing(); err != nil || !exists {
 		return nil, errRefused
 	}
-	a := sessionAcquirer{files: files}
+	a := sessionAcquirer{files: s.files}
 	if !a.absent(s, "retired.json") || !a.absent(s, "retirement.intent.json") {
 		return nil, errRefused
 	}
@@ -81,6 +96,8 @@ func loadGARMToken(files protectedFiles, path, parent, producer string, now time
 	if len(raw) == 0 || !s.unchanged() {
 		return nil, errRefused
 	}
-	accepted = true
-	return &sessionCredential{token: strings.TrimSuffix(string(raw), "\n"), controller: p.Controller, store: s}, nil
+	if now.Unix() < intent.Started {
+		return nil, errRefused
+	}
+	return &sessionCredential{token: strings.TrimSuffix(string(raw), "\n"), controller: p.Controller, store: s, expires: seal.Expires}, nil
 }
