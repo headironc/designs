@@ -6,7 +6,7 @@
 
 ## 已核源码
 
-本次领域判断覆盖 [GitHub 只读观察凭据](runner/github-observer.md)，基线为已合并的 [854181d](https://github.com/headironc/designs/commit/854181d4f037e3a7ca490d5b3b62a2d3b74c1937)。新供应准入复用现有 GARM 会话的 LXD 只读资源观察；凭据解封、GitHub 请求、消费者租约与退役不引入 LXD daemon handler 或浏览器接口。准确 Go 源码与两锁由[五项处置记录](scripts/go-vuln-lxd.json)绑定。记录随本片 PR 接受独立代码和安全审查；领域核定时刻不代表正式审查已完成。
+本次领域判断覆盖[首次 disabled 连接](runner/connection.md)，基线为已合并的 [f18a0ba](https://github.com/headironc/designs/commit/f18a0badca1255499285b08570e1c2cde7968078)。连接准入复用现有会话的 LXD 只读资源观察，并读取私有镜像与 alias。临时凭据、GARM 创建与原停止 job 恢复不引入 LXD daemon handler 或浏览器接口。准确 Go 源码与两锁由[五项处置记录](scripts/go-vuln-lxd.json)绑定。记录随本片 PR 接受独立代码和安全审查；领域核定时刻不代表正式审查已完成。
 
 依赖固定为 `github.com/canonical/lxd@v0.0.0-20261012123619-3c94d4fae7ff`。固定 Go 1.27.3、Linux amd64、cgo、`-test -tags=integration` 的实际图仅包含 `client` 和 13 个 `shared` 包。准确包名列在记录中，没有 daemon 的 `lxd` 包和服务端 handler。
 
@@ -19,7 +19,7 @@
 
 本次重新检查了新增生产调用链、依赖锁及选定包图。原始扫描报告仍有五项可达符号告警，原生文本退出 3。当前图仍只有上述 14 个 LXD 包，没有本地非 Go 或 embed 输入。LXD 版本、checksum、工具范围及五项完整 OSV 内容均与记录相符。本次只更新准确源码绑定与核定时刻。逐项结论及 daemon 未核责任保持，不扩大豁免范围。
 
-本片新增的 [观察凭据准入](runner/internal/lifecycle/observer_host_linux.go)仅调用上述 `observeSessionMachine`。已重核固定 Unix socket、GET 限制和 operations 最小投影；模块、14 包集合、五份 OSV 原摘要及非 Go/embed 输入边界均保持。原生 JSON 扫描完成，文本仍退出 3；原五项告警完整保留，不增加或放宽处置理由。
+本片的 [连接准入](runner/internal/lifecycle/connection_host_linux.go)通过 `withMachineClient` 调用 `GetImage` 和 `GetImageAlias`。固定 LXD client 的实际实现均为 GET，仍由 Unix socket、禁代理、禁重定向和只读 transport 约束。它不下载镜像、不取得 image secret，也不调用终端、证书或存储管理接口。已重核共享来源中的 operations 最小投影；模块、14 包集合、五份 OSV 原摘要及非 Go/embed 输入边界均保持。原生 JSON 扫描完成，文本仍退出 3；原五项告警完整保留，不增加或放宽处置理由。
 
 ## 逐项依据
 

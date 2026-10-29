@@ -276,6 +276,12 @@ func (c capture) execute(ctx context.Context, requestPath, operations string) (s
 // Run exposes a fixed production observation route. Test endpoints and fixture
 // roots are private implementation inputs, never flags or environment settings.
 func Run(ctx context.Context, args []string, output, diagnostic io.Writer) int {
+	if len(args) > 0 && args[0] == "connect-disabled" {
+		return runConnection(ctx, args[1:], false, output, diagnostic)
+	}
+	if len(args) > 0 && args[0] == "retire-connection-credentials" {
+		return runConnection(ctx, args[1:], true, output, diagnostic)
+	}
 	if len(args) > 0 && args[0] == "acquire-github-observer" {
 		return runObserver(ctx, args[1:], false, output, diagnostic)
 	}
@@ -328,6 +334,7 @@ func Run(ctx context.Context, args []string, output, diagnostic io.Writer) int {
 	garmCredential := f.String("garm-token-file", "", "existing read-only credential")
 	sessionSHA := f.String("garm-session-sha256", "", "trusted producer of a managed GARM session")
 	observerSHA := f.String("github-observer-sha256", "", "trusted producer of a managed GitHub observer")
+	connectionSHA := f.String("disabled-connection-sha256", "", "trusted producer of the fixed disabled connection")
 	if f.Parse(args[1:]) != nil || f.NArg() != 0 || *requestPath == "" || *operations == "" || *githubCredential == "" || *garmCredential == "" {
 		return fail()
 	}
@@ -349,12 +356,14 @@ func Run(ctx context.Context, args []string, output, diagnostic io.Writer) int {
 	var p *platforms
 	var credential *sessionCredential
 	var observer *sessionCredential
+	var connection *connectionLease
 	defer func() {
 		if p != nil {
 			p.close()
 		}
 		credential.close()
 		observer.close()
+		connection.close()
 	}()
 	loadCredentials := func() error {
 		var err error
@@ -367,6 +376,12 @@ func Run(ctx context.Context, args []string, output, diagnostic io.Writer) int {
 			return errRefused
 		}
 		p = credentialPlatforms(observer.token, credential.token, nil, observer, credential)
+		if *connectionSHA != "" {
+			connection, err = loadConnection(files, sessionParent, *connectionSHA, time.Now())
+			if err != nil {
+				return errRefused
+			}
+		}
 		return nil
 	}
 	observe := func(ctx context.Context, r request, b provider.ExecutionBinding) (int, error) {
@@ -376,7 +391,14 @@ func Run(ctx context.Context, args []string, output, diagnostic io.Writer) int {
 		if credential.controller != "" && credential.controller != r.Controller {
 			return 0, errRefused
 		}
-		return p.observe(ctx, r, b)
+		if connection != nil && !connection.matches(r, b) {
+			return 0, errRefused
+		}
+		id, err := p.observe(ctx, r, b)
+		if err != nil || connection != nil && (id != connection.binding.GitHubScaleSet || !connection.matches(r, b)) {
+			return 0, errRefused
+		}
+		return id, nil
 	}
 	stage = "producer"
 	producerSHA, err := runningDigest()

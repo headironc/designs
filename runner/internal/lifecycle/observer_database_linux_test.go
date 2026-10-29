@@ -78,3 +78,32 @@ func TestObserverDatabaseWALOnlyAndStrictSource(t *testing.T) {
 		})
 	}
 }
+
+func TestObserverSourceAllowsOnlyIdleInventoryChanges(t *testing.T) {
+	db, files, sp := sessionDatabaseFixture(t)
+	p := observerDatabaseFixtureRows(t, db, sp)
+	before, err := readObserverDatabase(context.Background(), files, p, sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO scale_sets VALUES(28,100,'cccccccc-0000-4000-8000-000000000003','disabled-next','halo-lxd',0,NULL,NULL,NULL)"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := readObserverDatabase(context.Background(), files, p, sp)
+	if err != nil || before.Identity == after.Identity || before.Source != after.Source {
+		t.Fatal("inventory/source responsibility", err)
+	}
+	if _, err := db.Exec("UPDATE users SET generation=generation+1"); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := readObserverDatabase(context.Background(), files, p, sp)
+	if err != nil || changed.Source == after.Source {
+		t.Fatal("user generation not bound", err)
+	}
+	if _, err := db.Exec("UPDATE scale_sets SET enabled=1 WHERE id=28"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readObserverDatabase(context.Background(), files, p, sp); err == nil {
+		t.Fatal("enabled inventory accepted")
+	}
+}
