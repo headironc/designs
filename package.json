@@ -11,15 +11,9 @@
     "format": "node scripts/format.ts --write",
     "typecheck": "tsc --noEmit",
     "test:format": "node --test scripts/format.test.ts",
-    "test:go-tools": "node --test scripts/go-check.test.ts",
-    "go:prepare": "node scripts/go-check.ts --prepare",
-    "go:check": "node scripts/go-check.ts",
     "links:prepare": "node scripts/links.ts --prepare",
     "links:check": "node scripts/links.ts",
-    "test:links": "node --test scripts/links.test.ts",
-    "go:vuln:prepare": "node scripts/go-vuln.ts --prepare",
-    "go:vuln:check": "node scripts/go-vuln.ts",
-    "test:go-vuln": "node --test scripts/go-vuln.test.ts"
+    "test:links": "node --test scripts/links.test.ts"
   },
   "devDependencies": {
     "@types/node": "26.6.4",

@@ -14,7 +14,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import { formatFiles, verifyGoFormat } from "./format.ts";
+import { formatFiles } from "./format.ts";
 import { listSourcePaths } from "./source.ts";
 
 const repository = path.resolve(import.meta.dirname, "..");
@@ -43,11 +43,9 @@ test("checking is read-only, repair is idempotent and repository settings can ch
   writeFileSync(path.join(root, file), original);
   // Neither ignored patterns nor a config in the parent takes ownership of this file.
   writeFileSync(path.join(root, ".prettierignore"), "*\n");
-  assert.deepEqual(await formatFiles(root, [file], false, "/missing-go"), [
-    file,
-  ]);
+  assert.deepEqual(await formatFiles(root, [file], false), [file]);
   assert.equal(readFileSync(path.join(root, file), "utf8"), original);
-  await formatFiles(root, [file], true, "/missing-go");
+  await formatFiles(root, [file], true);
   assert.equal(
     readFileSync(path.join(root, file), "utf8"),
     "const value = { x: 1 };\n",
@@ -164,29 +162,7 @@ test("repair preserves concurrent edits and refuses hardlinked files", async (t)
   assert.equal(readFileSync(file, "utf8"), edited);
 });
 
-test("the actual Go formatter rejects invalid syntax and repairs Go source", async (t) => {
-  verifyGoFormat();
-  const root = fixture(t);
-  writeFileSync(
-    path.join(root, "sample.go"),
-    "package sample\nfunc Value()int{return 1}\n",
-  );
-  assert.deepEqual(await formatFiles(root, ["sample.go"], false), [
-    "sample.go",
-  ]);
-  await formatFiles(root, ["sample.go"], true);
-  assert.equal(
-    readFileSync(path.join(root, "sample.go"), "utf8"),
-    "package sample\n\nfunc Value() int { return 1 }\n",
-  );
-  assert.deepEqual(await formatFiles(root, ["sample.go"], false), []);
-  const invalid = "package sample\nfunc {\n";
-  writeFileSync(path.join(root, "sample.go"), invalid);
-  await assert.rejects(formatFiles(root, ["sample.go"], true), /sample.go/);
-  assert.equal(readFileSync(path.join(root, "sample.go"), "utf8"), invalid);
-});
-
-test("CLI covers new files, excludes deletions and ignored outputs, and needs no Go for TS", (t) => {
+test("CLI covers new files and excludes deletions and ignored outputs", (t) => {
   const root = fixture(t);
   mkdirSync(path.join(root, "scripts"));
   for (const file of ["format.ts", "source.ts"])
@@ -209,7 +185,7 @@ test("CLI covers new files, excludes deletions and ignored outputs, and needs no
   rmSync(path.join(root, "deleted.ts"));
   writeFileSync(path.join(root, "ignored.ts"), "invalid = ;\n");
   mkdirSync(path.join(root, ".build"));
-  writeFileSync(path.join(root, ".build/output.go"), "invalid = ;\n");
+  writeFileSync(path.join(root, ".build/output.ts"), "invalid = ;\n");
   const literal = "new with [brackets].ts";
   writeFileSync(path.join(root, literal), "const x=1\n");
   const run = (...args: string[]) =>
@@ -221,7 +197,6 @@ test("CLI covers new files, excludes deletions and ignored outputs, and needs no
         encoding: "utf8",
         env: {
           ...process.env,
-          DESIGNS_GO_BIN: "/missing-go",
           GIT_DIR: "/unrelated",
           GIT_WORK_TREE: "/unrelated",
         },
@@ -256,11 +231,6 @@ test("CLI covers new files, excludes deletions and ignored outputs, and needs no
     path.join(repository, ".prettierrc.json"),
     path.join(root, ".prettierrc.json"),
   );
-  writeFileSync(path.join(root, "sample.go"), "package sample\n");
-  const missingGo = run("--check", "sample.go");
-  assert.equal(missingGo.status, 2);
-  assert.match(missingGo.stderr, /missing-go/);
-  rmSync(path.join(root, "sample.go"));
   writeFileSync(
     Buffer.concat([
       Buffer.from(root + path.sep),
@@ -275,7 +245,7 @@ test("CLI covers new files, excludes deletions and ignored outputs, and needs no
     "invalid = ;\n",
   );
   assert.equal(
-    readFileSync(path.join(root, ".build/output.go"), "utf8"),
+    readFileSync(path.join(root, ".build/output.ts"), "utf8"),
     "invalid = ;\n",
   );
 });
