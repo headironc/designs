@@ -1,13 +1,9 @@
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  accessSync,
   closeSync,
-  constants,
   fstatSync,
   ftruncateSync,
   readFileSync,
-  realpathSync,
   writeSync,
 } from "node:fs";
 import path from "node:path";
@@ -35,80 +31,18 @@ const parsers: Record<string, string> = {
 };
 
 export function formatPaths(files: string[]): string[] {
-  return files.filter(
-    (file) => file.endsWith(".go") || parsers[path.extname(file)],
-  );
-}
-
-function executable(name: string): string {
-  for (const directory of (process.env.PATH ?? "").split(path.delimiter)) {
-    if (!directory) continue;
-    const file = path.resolve(directory, name);
-    try {
-      accessSync(file, constants.X_OK);
-      return realpathSync(file);
-    } catch (error) {
-      if (
-        !["ENOENT", "EACCES", "ENOTDIR"].includes(
-          (error as NodeJS.ErrnoException).code ?? "",
-        )
-      )
-        throw error;
-    }
-  }
-  throw new Error(
-    `Missing ${name}; install the Go version in runner/go.mod or set DESIGNS_GO_BIN`,
-  );
-}
-
-export function verifyGoFormat(goBin = process.env.DESIGNS_GO_BIN): string {
-  const gofmt = goBin
-    ? realpathSync(path.join(goBin, "gofmt"))
-    : executable("gofmt");
-  const go = goBin ? path.join(goBin, "go") : executable("go");
-  const root = openSourceRoot(repository);
-  let required: string | undefined;
-  try {
-    const descriptor = openSourceFile(root, "runner/go.mod", false);
-    try {
-      required = /^go (\S+)$/m.exec(readFileSync(descriptor, "utf8"))?.[1];
-    } finally {
-      closeSync(descriptor);
-    }
-  } finally {
-    closeSync(root);
-  }
-  if (!required) throw new Error("Missing Go version in runner/go.mod");
-  const version = execFileSync(go, ["version", gofmt], {
-    encoding: "utf8",
-    timeout: 10_000,
-    env: {
-      PATH: "/usr/bin:/bin",
-      // Inspecting these binaries does not require a relocated full SDK.
-      GOROOT: path.dirname(gofmt),
-      GOTOOLCHAIN: "local",
-      GOWORK: "off",
-      GOENV: "off",
-    },
-  }).trim();
-  if (version !== `${gofmt}: go${required}`)
-    throw new Error(`Formatting requires gofmt built with Go ${required}`);
-  return gofmt;
+  return files.filter((file) => parsers[path.extname(file)]);
 }
 
 export async function formatFiles(
   root: string,
   files: string[],
   write: boolean,
-  goBin?: string,
 ): Promise<string[]> {
   const selected = formatPaths(files);
   if (!selected.length) throw new Error("No supported source files selected");
   const sourceRoot = openSourceRoot(root);
   try {
-    const gofmt = selected.some((file) => file.endsWith(".go"))
-      ? verifyGoFormat(goBin)
-      : undefined;
     // Only the repository root owns format settings; no parent config or EditorConfig lookup.
     const config = openSourceFile(sourceRoot, ".prettierrc.json", false);
     let options: prettier.Options;
@@ -146,20 +80,11 @@ export async function formatFiles(
             fatal: true,
             ignoreBOM: true,
           }).decode(bytes);
-          const formatted = file.endsWith(".go")
-            ? execFileSync(gofmt!, [], {
-                input: original,
-                encoding: "utf8",
-                timeout: 30_000,
-                maxBuffer: 16 * 1024 * 1024,
-                env: { PATH: "/usr/bin:/bin" },
-                stdio: ["pipe", "pipe", "pipe"],
-              })
-            : await prettier.format(original, {
-                ...options,
-                parser: parsers[path.extname(file)]!,
-                filepath: target,
-              });
+          const formatted = await prettier.format(original, {
+            ...options,
+            parser: parsers[path.extname(file)]!,
+            filepath: target,
+          });
           if (original !== formatted) {
             differences.push(file);
             if (write) {
