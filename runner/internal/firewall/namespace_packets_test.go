@@ -27,9 +27,10 @@ type packetRequest struct {
 	SourcePort int
 }
 type packetResponse struct {
-	PID   int
-	OK    bool
-	Error string
+	PID    int
+	OK     bool
+	Error  string
+	Detail string
 }
 
 type packetProcess struct {
@@ -195,6 +196,10 @@ func (s *echoServers) close() {
 }
 
 func probePacket(request packetRequest) bool {
+	return probePacketError(request) == nil
+}
+
+func probePacketError(request packetRequest) error {
 	dialer := net.Dialer{Timeout: packetTimeout}
 	if request.Source != "" || request.SourcePort != 0 {
 		if request.Network == "udp4" {
@@ -205,17 +210,39 @@ func probePacket(request packetRequest) bool {
 	}
 	connection, err := dialer.Dial(request.Network, request.Address)
 	if err != nil {
-		return false
+		return err
 	}
 	defer connection.Close()
 	_ = connection.SetDeadline(time.Now().Add(packetTimeout))
 	const payload = "nucleiron-private-fixture"
 	if _, err := io.WriteString(connection, payload); err != nil {
-		return false
+		return err
 	}
 	response := make([]byte, len(payload))
 	_, err = io.ReadFull(connection, response)
-	return err == nil && string(response) == payload
+	if err != nil {
+		return err
+	}
+	if string(response) != payload {
+		return fmt.Errorf("unexpected echo payload %q", response)
+	}
+	return nil
+}
+
+// Read only the disposable actor's network state after an unexpected result.
+func privateNetworkState() string {
+	var state bytes.Buffer
+	for _, args := range [][]string{{"-6", "address", "show"}, {"-6", "route", "show", "table", "all"}, {"-6", "neigh", "show"}} {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		out, err := exec.CommandContext(ctx, "ip", args...).CombinedOutput()
+		cancel()
+		fmt.Fprintf(&state, "ip %v: %v\n%s\n", args, err, out)
+	}
+	for _, path := range []string{"/proc/sys/net/ipv6/conf/all/forwarding", "/proc/net/snmp6"} {
+		value, err := os.ReadFile(path)
+		fmt.Fprintf(&state, "%s: %v\n%s\n", path, err, value)
+	}
+	return state.String()
 }
 
 func packetActor(t *testing.T) {
@@ -282,7 +309,16 @@ func packetActor(t *testing.T) {
 			if !configured {
 				t.Fatal("packet actor not configured")
 			}
-			if err := encoder.Encode(packetResponse{OK: probePacket(request)}); err != nil {
+			probeErr := probePacketError(request)
+			response := packetResponse{OK: probeErr == nil}
+			if probeErr != nil {
+				response.Detail = probeErr.Error()
+			}
+			if err := encoder.Encode(response); err != nil {
+				t.Fatal(err)
+			}
+		case "diagnose":
+			if err := encoder.Encode(packetResponse{OK: true, Detail: privateNetworkState()}); err != nil {
 				t.Fatal(err)
 			}
 		default:
@@ -362,9 +398,10 @@ func (f packetFixture) check(t *testing.T, stage string, filtered bool) {
 	)
 	for _, c := range cases {
 		want := !filtered || c.allowed
-		got := c.actor.request(t, c.request).OK
-		if got != want {
-			t.Fatalf("%s / %s: reachable=%t want=%t", stage, c.name, got, want)
+		response := c.actor.request(t, c.request)
+		if response.OK != want {
+			actor := c.actor.request(t, packetRequest{Action: "diagnose"})
+			t.Fatalf("%s / %s: reachable=%t want=%t: %s\nactor:\n%s\nrouter:\n%s", stage, c.name, response.OK, want, response.Detail, actor.Detail, privateNetworkState())
 		}
 	}
 	if !probePacket(packetRequest{Network: "tcp4", Address: "127.0.0.1:10080"}) {
