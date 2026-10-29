@@ -1,5 +1,7 @@
 # Guard 正常启动准入
 
+本文维护已有自研 guard 链路的程序合同，输入、状态与拒绝规则保持。新的[正常架构](architecture.md)直接使用上游 provider，不以本入口为默认运行前置。
+
 `guarded-provider --check-startup` 为 controller 的 `ExecStartPre` 提供正常启动校验。本片使用标准库和 `golang.org/x/sys/unix v0.49.0`。程序只读取配置、native provider 和 guard 记录。检查成功退出 `0`，操作锁忙退出 `75`，其他拒绝退出 `1`。失败日志仅包含固定事件和阶段，不输出路径内容、原始错误或秘密。
 
 ## 启动条件
@@ -30,7 +32,7 @@ JSON 对象拒绝重复键和大小写别名，防止有值的意图被后一个
 
 [30-provider-guard.conf](templates/30-provider-guard.conf) 保留原挂载依赖和 `lxd` 附加组。切换时作为 `nucleiron.service.d/30-provider-guard.conf` 的完整替换文件消费，将该文件中的 `ExecStartPre` 指向新 Go 入口。核对其他 drop-in，避免遗留启动校验重复执行；不清空其他能力拥有的启动条件。
 
-正常启动切片不修改 GARM external provider 的执行路径。二进制现已增加单次创建、删除与正常读取能力，完整运行切换仍等待剩余能力及部署验收，不覆盖旧 `guarded-lxd-provider`。不恢复已停止的 Python 流程，也不建立 Python fallback。
+该启动入口不修改 GARM external provider 的执行路径。已有单次创建、删除与读取代码继续保全，不因此要求后续完成整套 Go 切换。本文不覆盖旧 `guarded-lxd-provider`，不恢复已停止的 Python 流程，也不建立 Python fallback。标准路径的部署与迁移由当前架构单独选择。
 
 部署能力准备已有身份绑定的 policy、native 配置、guard 状态与永久锁。缺文件时启动检查失败，不自动初始化或修复状态。已有意图、latch、维护许可和未知操作保持原字节及恢复责任。旧操作由固定原恢复程序解释，不通过迁移记录或删除标记放行。
 

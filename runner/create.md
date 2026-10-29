@@ -1,8 +1,10 @@
 # 单次 VM 创建准入与执行
 
+本文维护已有自研 guard 链路的程序合同，输入、状态与拒绝规则保持。新的[正常架构](architecture.md)直接使用上游 provider，不以本入口为默认运行前置。
+
 `guarded-provider` 无参数运行时接收 GARM `v0.1.0` 的 `CreateInstance` 请求。它在准入后调用一次 native LXD provider，核对结果并持久化 active。成功退出 `0`，永久操作锁忙退出 `75`，其余拒绝退出 `1`。同一入口另支持独立的 [DeleteInstance](delete.md) 和[正常读取](read.md)；其他 provider 命令均拒绝，正常启动与 watchdog 参数入口保持各自职责。
 
-本文维护单次创建行为。[删除与容量释放](delete.md)和[正常只读协议](read.md)由对应能力维护；records-only、旧记录迁移和部署仍不在创建范围。完整 provider 切换还须完成剩余能力及宿主验收，GARM 已安装的 external provider 路径不变。
+本文维护该入口的单次创建行为。[删除与容量释放](delete.md)和[正常只读协议](read.md)由对应能力维护；records-only、旧记录迁移和部署仍不在创建范围。GARM 已安装的 external provider 路径保持；新架构的切换另片选择，不要求先完成旧 Go 路线的剩余能力。
 
 ## 准入与输入
 

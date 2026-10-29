@@ -1,5 +1,7 @@
 # 首次 disabled 连接
 
+本文保留自有管理入口及其原凭据、记录和 unknown 合同。新的[正常运维路径](architecture.md)使用标准 GARM 配置、API/CLI，不依赖该自有窗口或状态机。
+
 `runner-admin connect-disabled` 核对 `headironc/nucleus` 的首次连接。结果绑定 GARM repository、GARM ScaleSet 和 GitHub ScaleSet。新 ScaleSet 保持 disabled，容量固定为 1，空闲数为 0。结果供现有执行身份采集入口核对。启用、创建 VM 和执行 job 使用独立准入。源码验证使用合成凭据和隔离服务；现场操作另行授权。
 
 ## 输入与来源

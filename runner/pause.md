@@ -4,7 +4,7 @@
 
 这个结果只覆盖 timer 与原 worker。controller、gateway、凭据、guard 和外部操作仍由各自 owner 处理。worker 可能在退出前完成自己的禁用或 controller 停止操作；排空不证明那些操作成功，也不证明整个执行闭合。
 
-[Gateway 停止](gateway.md)作为下一独立消费者，持有原 `pause.lock`，再取得已有 `operation.lock`，共享严格原件核验与当前暂停观察；它不修改暂停四份原件，也不重发 timer 请求。
+已有 [gateway 停止](gateway.md)消费者持有原 `pause.lock`，再取得已有 `operation.lock`，共享原件核验与暂停观察；它不修改暂停四份原件，也不重发 timer 请求。两者属于保留的[旧恢复链路](records-recovery.md)，不是新标准路径的默认前置。
 
 ## 第一次请求
 

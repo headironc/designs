@@ -1,6 +1,19 @@
-# Runner Go 实现
+# Runner 架构与已有 Go 程序
 
-已交付专用防火墙重载、[guest bootstrap](bootstrap.md)、[provider 异常停接](watchdog.md)、[Go guard 正常启动准入](startup.md)、[guard watchdog 检查与状态持久化](guard-watchdog.md)、[单次 VM 创建](create.md)、[VM 删除与容量释放](delete.md)、[provider 正常只读协议](read.md)、[原执行身份采集](execution.md)、[闭合诊断](closure.md)、[watchdog 暂停](pause.md)、[gateway 停止](gateway.md)、[历史 prepare 原件观察](prepare-evidence.md)和 [当前安装文件比对](installed-evidence.md)。本片新增 [GARM 管理会话窗口](session.md)，覆盖认证域轮换、单次登录、受管消费和到期退役。异常停接已接入 GARM client 与 go-systemd，包含原停止 job 恢复。诊断分别报告 job 结论、资源事实和证据缺口，不签发清理许可。已采用的 Go 包及后续接入边界见 [架构选型](architecture.md#已采用的-go-包)。防火墙入口使用 [原生 nftables 事务](firewall.md)；源码验收与实际服务切换分别执行。
+当前[目标架构](architecture.md)采用 GARM v0.2.1 与上游 LXD provider v0.1.5，由 GitHub 原生 job container 消费固定 Kiln。正常路径不经过自有 guard/gate，也不要求每个 PR 的资源闭合封印。异常由运行侧停接和告警处理。部署、标准路径的真实 VM 与故障验收尚未完成。
+
+本目录已有 Go 程序及其输入、状态、恢复和检查合同继续保留。下表是源码能力导航，不是新目标的安装清单。旧 unknown 由[历史恢复协议](records-recovery.md)维护；未合入的四 unit 隔离 WIP 已暂停，不属于下列已交付代码。
+
+| 已有能力            | 文档与范围                                                                                                                               |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| 防火墙与 guest 程序 | [原生 nftables](firewall.md)、[guest bootstrap](bootstrap.md)，保留既有程序和模板                                                        |
+| 自有 provider/guard | [启动准入](startup.md)、[guard watchdog](guard-watchdog.md)、[创建](create.md)、[删除](delete.md)、[读取](read.md)，保留原状态与容量规则 |
+| 旧域异常与停服      | [watchdog](watchdog.md)、[暂停](pause.md)、[gateway 停止](gateway.md)，保留原请求及 job 恢复                                             |
+| 原执行证据          | [身份采集](execution.md)、[闭合诊断](closure.md)，不签新正常运行许可                                                                     |
+| 历史与安装观察      | [prepare 原件](prepare-evidence.md)、[安装比对](installed-evidence.md)，保留只读范围及证据缺口                                           |
+| 自有管理与连接      | [GARM 会话](session.md)、[观察凭据](github-observer.md)、[disabled 连接](connection.md)，保留原凭据及 unknown 恢复                       |
+
+新架构优先使用上游模板、标准配置和 API/CLI；这些既有自研能力不因保全源码而继续扩成默认路线。具体去向、[已有 Go 包](architecture.md#已采用的-go-包)及下一待选片由架构文档维护。
 
 `runner-firewall` 供 `nucleiron-firewall.service` 的启动与重载使用。零参数入口读取 root 所有、模式 `0600` 的 `/etc/nucleiron-gateway/firewall.json`。纯 `render-config` 子命令输出当前版本的非敏感 JSON；服务不接受 nft 文本或 CLI fallback。
 
@@ -14,7 +27,7 @@
 
 仓库完整验收使用根目录的 [Go 检查入口](../README.md#go-检查)。本地与原生 CI 运行相同三层检查，包含 race、五个命令构建、私有降权容器和 nft namespace。下文保留各能力的底层命令及运行边界。
 
-当前自有 module 使用标准库、x/sys、GARM client、LXD client、go-github、go-systemd、modernc SQLite、BurntSushi TOML、google/nftables 和 mdlayher/netlink；版本由 `go.mod` / `go.sum` 固定，其余目标依赖随对应实施片接入。Linux amd64 构建固定使用 [Go 1.27.3](https://go.dev/dl/)，即本片核定时的最新稳定版。官方工具链归档 SHA256 为 `65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40`。先下载并验证工具链，再准备固定依赖。provider、watchdog 和 lifecycle 的私有 D-Bus 测试还需 `dbus-daemon`，不连接宿主 system bus。闭合诊断的实际降权用例另需 [一次性私有容器](closure.md#验证与后续边界)，普通测试的 skip 不证明该项通过。
+当前自有 module 使用标准库、x/sys、GARM client、LXD client、go-github、go-systemd、modernc SQLite、BurntSushi TOML、google/nftables 和 mdlayher/netlink；版本由 `go.mod` / `go.sum` 固定。Linux amd64 构建固定使用 [Go 1.27.3](https://go.dev/dl/)。官方工具链归档 SHA256 为 `65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40`。先下载并验证工具链，再准备固定依赖。provider、watchdog 和 lifecycle 的私有 D-Bus 测试还需 `dbus-daemon`，不连接宿主 system bus。闭合诊断的实际降权用例另需 [一次性私有容器](closure.md#验证与后续边界)，普通测试的 skip 不证明该项通过。
 
 首次在本目录联网准备缓存，使用 Go 官方模块代理与校验数据库：
 
@@ -55,7 +68,7 @@ RUNNER_FIREWALL_NAMESPACE=1 go test -count=1 -tags=integration \
 
 新入口在发送前验证配置与前态，先持久化原意图，再发送一次 netlink batch。取消或回执丢失保留 unknown；恢复仅核原操作。具体记录、已知结果与下一次显式 reload 的边界见 [事务恢复](firewall.md#事务与恢复)。
 
-本片不能代替完整 runner 的 Go 接续。provider、凭据、连接、VM 生命周期及旧未知操作仍按 [结构与实施切片](architecture.md) 分别交付。维护窗口的进入、写入和退出条件见 [records-only 恢复协议](records-recovery.md)，对应 Go 运行能力尚未实现。现有 Python 恢复现场保全；本片不重启原操作。
+构建和源码交付不启动新标准路径，也不自动继续完整 Go 接续。旧维护窗口的进入、写入和退出条件见[历史恢复协议](records-recovery.md)，其未实现能力仅在另行选片后推进。新目标的标准验证与旧域迁移分别选择，Python 恢复现场及原操作继续保全。
 
 ## 行为来源
 

@@ -1,5 +1,7 @@
 # Provider 正常只读协议
 
+本文维护已有自研 guard 链路的程序合同，输入、状态与拒绝规则保持。新的[正常架构](architecture.md)直接使用上游 provider，不以本入口为默认运行前置。
+
 `guarded-provider` 无参数运行时接受 `GetVersion`、`GetInstance` 和 `ListInstances`。正常查询成功退出 `0`，永久操作锁忙退出 `75`，其余拒绝退出 `1`。这三个入口只返回经过核验的 native 响应，不写 guard 状态，也不创建或删除 VM。
 
 ## 调用与准入
@@ -35,4 +37,4 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
 
 状态测试覆盖三个命令、未 ready 与已 ready、错误身份、维护与未结操作、非法响应、空清单与残留冲突、取消和失败后原记录保持。真实子进程替身验证三个命令的最小环境、空 stdin 和固定描述符。私有 Unix HTTP 服务通过实际 LXD SDK 验证记录 UUID、归属及 operation 状态；创建和删除的共享执行失败、事务与资源回归同时运行。
 
-本片完成正常模式读取，不提供 records-only、清记录或历史记录迁移。GARM 已安装的 external provider 路径保持不变。完整运行切换仍需剩余能力和宿主验收；源码检查不访问真实 LXD，不启用 ScaleSet，不部署服务。
+本入口完成自有 guard 正常模式读取，不提供 records-only、清记录或历史记录迁移。GARM 已安装的 external provider 路径保持不变。新标准路径独立验证，不等待旧 Go 路线的剩余能力；源码检查不访问真实 LXD，不启用 ScaleSet，不部署服务。

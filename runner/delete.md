@@ -1,5 +1,7 @@
 # VM 删除与容量释放
 
+本文维护已有自研 guard 链路的程序合同，输入、状态与拒绝规则保持。新的[正常架构](architecture.md)直接使用上游 provider，不以本入口为默认运行前置。
+
 `guarded-provider` 无参数运行时按 `GARM_COMMAND=DeleteInstance` 处理单次删除。成功退出 `0`，永久操作锁忙退出 `75`，其余拒绝退出 `1`。入口不提供批量删除、清记录或自动恢复；删除与[单次创建](create.md)使用同一个永久锁和状态事务。
 
 ## 准确目标与准入
@@ -37,4 +39,4 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
 
 测试使用私有 Unix HTTP 服务验证实际 LXD SDK，以及真实子进程替身验证参数、固定输入、成功、退出失败、取消、输出超限和 SIGKILL。状态测试覆盖名称错配、UUID 替换、未完成 bootstrap、写前失败、资源残留、提交失败、latch 保留、再次调用拒绝和释放后的创建准入。创建、watchdog 与共享状态事务的原回归同时运行。
 
-本片交付 provider 删除与占用记录的闭环。跨 GitHub job、runner 注销、GARM 原实例、QEMU/cgroup、快照和临时凭据的完整生命周期验收仍由 [runner 架构](../ci-architecture.md#生命周期与恢复)约束。本片测试不证明真实任务或宿主资源已经闭合。没有启用 ScaleSet、连接真实 LXD、创建或删除真实 VM，也没有修改安装路径。[正常读取](read.md)由对应能力维护；records-only、旧记录迁移和部署另行实施。
+本入口交付自有 provider 删除与占用记录的闭环。跨 GitHub、GARM、QEMU/cgroup、快照和临时凭据的旧完整闭合条件由[历史恢复协议](records-recovery.md#历史执行闭合与占用)维护，不是新标准路径的逐 job 门禁。本片测试不证明真实任务或宿主资源已经闭合。没有启用 ScaleSet、连接真实 LXD、创建或删除真实 VM，也没有修改安装路径。[正常读取](read.md)由对应能力维护；旧恢复能力与部署仅在另行选片后实施。

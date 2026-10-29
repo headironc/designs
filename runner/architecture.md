@@ -1,12 +1,70 @@
-# Runner 的 Go 结构与实施切片
+# Runner 精简架构与迁移边界
 
-本设计将 runner 自有实现改为 Go，并按独立业务结果交付。[专用防火墙重载](README.md)、[guest bootstrap](bootstrap.md)、[provider 异常停接](watchdog.md)、[Go guard 正常启动准入](startup.md)、[guard watchdog 检查与状态持久化](guard-watchdog.md)、[单次 VM 创建](create.md)、[VM 删除与容量释放](delete.md)、[provider 正常只读协议](read.md)、[原执行身份采集](execution.md)、[闭合诊断](closure.md)、[watchdog 暂停](pause.md)、[gateway 停止](gateway.md)和 [历史 prepare 原件观察](prepare-evidence.md)已合入。本片新增独立的 [当前安装文件比对](installed-evidence.md)，核固定 25 文件与原计划，保留其他当前前态缺口，不恢复旧请求。异常停接已接入 GARM client 与 go-systemd，包含原停止 job 恢复。已修正的 [ScaleSet 池身份](#scaleset-的-provider-池身份)保持不变。本文已采用下述 Go 包，依赖随对应消费者接入。现有 Python 快照用于行为对照，历史操作仍保留原身份、原件与恢复入口；本片不得执行旧流程，也不核验其当前运行状态。GARM、LXD provider、nginx、rsyslog、Squid 和 dnsproxy 保持各自职责，不重写第三方组件。
+正常路径采用 GARM v0.2.1 与上游 LXD provider v0.1.5。GitHub 原生 job container 消费固定 Kiln digest。GARM、provider 和 LXD 承担实例生命周期；本项目维护必要配置、镜像和消费适配，不再建设第二套正常容量或资源闭合状态机。
 
-跨仓库边界由 [CI 架构](../ci-architecture.md#runner-与-kiln) 维护。designs 拥有 runner 自有程序及发布成品。Kiln 拥有任务镜像，消费仓库拥有工作流和业务检查。新代码在独立工作树准备，原接入现场和未知操作保全。
+这是已采用的目标架构，部署切换尚未实施。仓库已有 Go 程序继续保全；代码合入不表示现场已经切换。旧 guard/gate 退出目标正常路径，历史 unknown 及原程序合同由[历史恢复协议](records-recovery.md)维护。未合入的四 unit 隔离 WIP 仍暂停，不是当前源码的已交付能力，也不是新路线的前置。
 
-## 从现有消费者确定职责
+## 正常目标流与事实所有者
 
-下列路径均相对本次保存的 `halo-20261026/` 源码快照。它们是代码分析依据，不表示当前宿主部署版本。版本和来源摘要由本地 `source-manifest.json` 记录。原目录名不承担运行版本选择。
+GitHub 接收仓库原生 workflow，负责排队、分配、job 结论、取消及超时。GARM ScaleSet 使用 ephemeral/JIT 为新 runner 创建唯一实例，直接调用上游 provider。LXD 从无实例身份的固定基础镜像创建 VM。VM 内官方 runner 使用原生 job container 拉取固定 Kiln，执行实际业务检查。
+
+完成消息进入 GARM 的清理路径。provider 停止原实例、请求删除并等待 LXD operation。GARM 处理删除结果后，更新其管理的实例和容量。正常链路不经过自有 guarded-provider，也不生成每个 PR 必须消费的 closed seal。上游行为见 [ScaleSet](https://github.com/cloudbase/garm/blob/v0.2.1/workers/scaleset/scaleset.go)、[完成消息](https://github.com/cloudbase/garm/blob/v0.2.1/workers/scaleset/scaleset_helper.go)、[实例状态机](https://github.com/cloudbase/garm/blob/v0.2.1/workers/provider/instance_manager.go)和 [LXD provider](https://github.com/cloudbase/garm-provider-lxd/blob/v0.1.5/provider/lxd.go)。
+
+| 事实                                | 正常 owner                         | 项目消费边界                                                |
+| ----------------------------------- | ---------------------------------- | ----------------------------------------------------------- |
+| commit、run/attempt/job、结论       | GitHub Actions 与消费仓库 workflow | 使用原生 checks、artifacts 和 API；guest 自述不授予管理权限 |
+| runner、JIT、ScaleSet、数据库状态   | GARM 与上游 worker                 | 使用支持的配置、API/CLI；不直接写库或维护镜像状态库         |
+| VM、根盘、operation 与 project 配额 | provider 与 LXD                    | 接受服务成功合同，异常沿原对象调查                          |
+| VM 基础镜像与 bootstrap             | 版本化镜像配方、上游模板及必要配置 | 无长期凭据和既有 runner 身份；提供 Docker、CA 与日志环境    |
+| Kiln 及业务检查                     | Kiln 发布、Nucleus 原生 CI         | 固定 registry digest，核工具、权限和环境兼容                |
+| 旧 unknown 与迁移资格               | 原恢复 owner                       | 保留原件和原判断，不复制成新正常状态机                      |
+
+初始采用一个仓库级 ScaleSet，min-idle=0、max-runners=1。专用 LXD project/profile 设置 VM 数量、CPU、内存和根盘上限，并隔离其他控制器及设备。配额约束 LXD 管理的资源，不独立证明内核孤儿消失。磁盘 quota 也不保证物理空闲；存储池、缓存容量和空闲告警须另行配置。
+
+## 凭据与不可信执行边界
+
+每个 job 使用新 VM，VM 承担与可信控制面的隔离。guest Docker 只提供任务容器环境。App 私钥、LXD socket、管理 token、宿主目录与发布凭据不进入 guest。guest 只取得本实例的 bootstrap/JIT 和任务所需短期 token。镜像不得带已有 runner 身份。
+
+GitHub App 安装范围、workflow permissions、Secret/Environment 和私有 Kiln 授权使用平台标准配置。可信发布任务与仓库级不可信池隔离。所有能进入该池的 workflow 都须满足边界，不能靠任务名称或执行后拒绝报告保护秘密。网络和包权限按[跨仓库边界](../ci-architecture.md#runner-与-kiln)验收。
+
+独立 bridge/project 与标准 ACL/防火墙阻断宿主、其他项目、内网及未授权 IPv6。若确需按域名出口或限制 metadata/callback 路径，复用 Squid/nginx 配置，GARM 管理 API 不对 guest 直通。DNS、IPv4/IPv6、重定向和管理面拒绝均待真实验证。[上游 provider](https://github.com/cloudbase/garm-provider-lxd/blob/v0.1.5/README.md) 不自动配置 ACL，这属于部署职责。
+
+## 正常删除与异常停接
+
+正常回收信任 LXD 原 operation 的成功合同，以及上游支持的资源不存在幂等语义。provider 本身会停止实例、删除并等待 operation。接受该合同不表示把 HTTP 202 或一次查询 HTTP 200 当成删除成功，也不表示物理介质擦除。独立 custom 卷与共享镜像有各自生命周期，部署配置不能让它们成为未管理的 job 可写盘。
+
+上游正常删除可针对原唯一实例重试，不要求每次另核 QEMU/cgroup、全部远端回执并签发统一封印。该取舍仅适用于新正常路径；旧 Go/Python 操作的 unknown、不重发、身份和容量合同保持。
+
+| 情形                           | 处理 owner 与行为                                  | 保留的限制                                               |
+| ------------------------------ | -------------------------------------------------- | -------------------------------------------------------- |
+| job 成功、失败、取消或超时     | GitHub 保存结论；GARM 完成消息、超时及对账推进清理 | 取消回执不等于 job 终态，启用前验证真实失败场景          |
+| bootstrap 或创建失败           | GARM 既有状态机处理 error、pending_delete 和清理   | 不叠加阻止上游推进的自有 intent 状态机                   |
+| 删除失败或通信中断             | 上游沿原唯一实例按幂等语义恢复；运行侧停接、告警   | 不用 force-delete 忽略 IaaS 错误来伪装回收成功           |
+| controller 重启                | GARM 使用持久化状态和启动恢复                      | 不重置数据库或换实例名绕开错误                           |
+| LXD 不可用、状态矛盾或疑似孤儿 | 停止新分配，保留对象和日志，进入人工异常处置       | QEMU/cgroup、卷及 operation 的额外取证只在准确授权下使用 |
+| 旧现场 unknown                 | 原恢复 owner 单独解释或证明隔离                    | 新路径重试规则不能覆盖旧 Login、连接及资源请求           |
+
+停接优先使用 GARM 标准 disabled 或控制器运维路径。禁止新建与允许现有待删资源继续回收分别验证，不假定 disabled 天然同时满足两者。告警及人工处置链须在启用前演练；不预建新 watchdog 平台，也不承诺网络分区下的固定恢复时限。
+
+原生 CI 按候选、业务覆盖和仓库保护接纳检查。清理异常触发运行侧停接和告警，保留独立基础设施状态，不改写 job 结论，不再为每个 PR 增加自有资源闭合门禁。
+
+## 必要定制与旧模块去向
+
+| 能力                                                       | 目标去向                         | 仍保留的责任                                                 |
+| ---------------------------------------------------------- | -------------------------------- | ------------------------------------------------------------ |
+| guarded-provider 创建、删除、读取及 active/intent 容量状态 | 从新正常路径退役，源码保全       | GARM worker 和上游 provider 拥有正常生命周期                 |
+| 自有 session、观察 token 供应及首次连接状态机              | 从新正常运维退役，保留原记录解释 | 最小凭据、到期及权限边界仍由标准管理配置落实                 |
+| 四 unit mask、永久 gate、原 job 封印                       | 暂停 WIP，不列为部署依赖         | 迁移停接使用准确授权的标准运维计划                           |
+| capture、closure、records-only 与旧 Python 恢复            | 仅保历史恢复使用                 | 不关闭旧 unknown，不自动继续未实现的恢复框架                 |
+| bootstrap、网络与日志                                      | 优先上游模板、配置和镜像配方     | 必要 CA、出口和日志边界仍须验收；旧 Go firewall 不在本片删除 |
+| Nucleus workflow 与 Kiln                                   | 保留最小消费适配                 | 业务矩阵、私有包授权及工具兼容仍由消费仓库负责               |
+| 验收工具                                                   | 随真实场景交付薄用例和报告       | 不拥有运行状态，也不签发常驻运行许可                         |
+
+当前未证实还需新的常驻自研 runner 管理程序。先完成配置、镜像、消费适配与真实验收。若上游确实不能表达某项必要规则，再为该消费者选择最小代码。下面的 Go 依赖和协议只描述保留程序，不是另一份正常部署路线图。
+
+## 旧运行链与来源
+
+下列路径均相对已保全的 `halo-20261026/` 源码快照。它们是代码分析依据，不表示当前宿主部署版本。版本和来源摘要由本地 `source-manifest.json` 记录。原目录名不承担运行版本选择。
 
 | 实际消费者及调用链                                                                                 | 自有职责                                                          | 现有事实与边界                                                                                          |
 | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
@@ -22,46 +80,13 @@
 | `vm-restore-guard-pin-20261026/lifecycle.py` → GitHub/GARM/LXD/宿主事实                            | 一次 VM 执行的验收与故障恢复                                      | 绑定 run/job/attempt、agent、VM UUID、QEMU 身份及 cgroup；回收成功与任务用例通过是两个结果              |
 | staging / collect / diagnosis 入口 → 固定源码、受保护原件和公开输出                                | 程序发布绑定、只读诊断与脱敏                                      | 发布清单不授予执行；公开文件在特权操作前独占创建；历史未知操作仍由原程序解释                            |
 
-初始 guard 与后续 records-only guard 不是等价副本。初始代码仍固定旧 repository URL。rebind 修复源码已有保全版本，但实际新 repository UUID 尚未交付。watchdog 消费显式 policy 输入并以合成身份验证；部署仍依赖真实绑定和原操作终态。[Records-only 恢复协议](records-recovery.md)维护新 Go 窗口的事实所有者、完整退出条件和实施依赖；当前运行能力尚未实现。
+这些保全版本中的初始 guard 固定旧 repository URL，与后续 records-only/rebind 版本并不等价。恢复既有程序时，原绑定、policy、源码版本和 unknown 仍由原 owner 核实，不能混用副本。[历史恢复协议](records-recovery.md)保留原窗口的事实所有者与退出条件。未实现的 Go 维护窗口不再列为正常路线的必做项。
 
 网络、镜像和诊断安装脚本还承担配置生成与宿主部署。模板来源与部署选择分开维护，不把现有 `/etc` 配置直接入库。已按来源清单核对日志模板：`guest-logs-server.conf` 的 SHA256 为 `4b93a348815e1079c31eb4c67996d7d5248efdf080ad462d4ef43f0a0541b0ad`。它用 `omfile` 写入 `/var/log/nucleiron/guests/current.log`，安装脚本配套 logrotate。旧测试中的 omprog 路径替换不证明当前存在该消费者。运行部署状态仍以原 owner 的宿主验收为准。
 
-## 目标代码结构
-
-使用一个自有 Go module，按实际进程边界设置入口。下图是目标，不预先创建空包。每个包随第一个真实消费者进入对应 PR。
-
-```text
-runner/
-  go.mod / go.sum
-  cmd/
-    runner-firewall/       # owned nftables replacement
-    guarded-provider/     # GARM external provider protocol and startup check
-    provider-watchdog/     # privileged admission stop
-    runner-bootstrap/     # guest JIT setup
-    runner-admin/         # explicit connection, inspection and recovery commands
-  internal/
-    firewall/             # owned rules and atomic nftables transactions
-    provider/             # policy, guard state, native invocation and reconciliation
-    watchdog/             # admission checks and bound controller stop requests
-    bootstrap/            # guest identity and completion protocol
-    connection/           # repository and disabled ScaleSet binding
-    credentials/          # sealed GARM payload, signing and session lifecycle
-    lifecycle/            # VM execution evidence and resource recovery
-    services/             # original systemd jobs and service windows
-    release/              # verified installation, previous version and recovery
-  templates/              # non-secret service and bootstrap templates
-  testdata/               # synthetic protocol fixtures used by actual tests
-```
-
-入口负责参数、环境变量、文件来源及退出状态。能力包负责值校验、状态转换、外部调用条件和错误处理。外部适配器靠近实际消费者；只有两个消费者确实共享同一协议时才抽取共享包。不建立全局 `utils`、通用任务调度器或可编排任意命令的框架。
-
-操作记录由各业务能力解释。文件独占创建、同步与安全读取可在首次复用时共享，但 `unknown` 的判断与恢复条件仍属于原业务。一次操作的输入、写意图、外部回执和结果不拆成彼此独立的基础设施 PR。
-
-GARM 仍负责 controller 与其数据库。自有代码通过已采用 API 和受限只读核验观察它，不新增直接数据库写入。原 Go signer 使用 GARM 的解封库和准确 JWT 协议。迁移时保留实际依赖与测试，不重新实现加密格式。
-
 ## 已采用的 Go 包
 
-以下选型覆盖整个 runner，均为已接受的目标依赖。正常启动已接入 `x/sys`，guard watchdog 已接入 LXD client 和 go-systemd 的只读单元查询。异常停接已接入 GARM client 与 go-systemd，包含原停止 job 恢复。创建和删除已采用 provider-common 与 LXD client；正常读取复用这些包及 GARM 的状态校验。原执行采集直接消费 go-github v84.0.0。已合入的闭合诊断已接入 modernc SQLite 和固定 GARM 已采用的 BurntSushi TOML，分别读取同事务快照和当前数据库路径。watchdog 暂停与 gateway 停止已复用 GARM client、go-systemd 和现有文件保护；已合入的历史 prepare 观察与本片安装文件比对均复用标准库及文件保护，不新增依赖。其余包随首个真实消费者进入独立实施片。已有实现也按表中目标迁移，不建立双版本兼容路径。
+本节记录仓库已有 Go 程序的依赖与协议，版本以 `go.mod`、`go.sum` 为准。它们继续服务现有程序与历史恢复，不是上游正常路径的另一套必装控制面。下列原写前记录、unknown 和不重发规则只约束这些程序，不能用来禁止上游正常删除的幂等恢复。
 
 | 包与上游                                                                                                                  | 承担的能力与消费者                                                  | 自有代码保留的责任                                                                                      |
 | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
@@ -71,30 +96,30 @@ GARM 仍负责 controller 与其数据库。自有代码通过已采用 API 和�
 | [`github.com/cloudbase/garm-provider-common/params`](https://pkg.go.dev/github.com/cloudbase/garm-provider-common/params) | guard 消费 external provider 请求与响应；bootstrap 使用原生模板参数 | 命令白名单、必填字段、身份、容量及准入校验；协议类型不代表已经获得许可                                  |
 | [`github.com/canonical/lxd/client`](https://pkg.go.dev/github.com/canonical/lxd/client)                                   | guard 和生命周期能力读取 VM、卷与原 LXD operation                   | 资源归属、原操作终态和释放容量条件；VM 写操作仍调用现有 native provider                                 |
 | [`github.com/google/go-github`](https://github.com/google/go-github) 的版本化 `github` 包                                 | 生命周期与连接能力读取 GitHub run、job、runner 和注册状态           | run/attempt/job 对应关系、权限边界与闭合判断                                                            |
-| [`github.com/coreos/go-systemd/v22/dbus`](https://pkg.go.dev/github.com/coreos/go-systemd/v22/dbus)                       | guard 依赖单元查询、watchdog 停服与恢复；后续服务安装窗口及恢复校验 | 只读查询校验属性类型与状态；发送变更时先订阅、持久化原 job，并分别确认 job 终态与 unit/进程/cgroup 状态 |
+| [`github.com/coreos/go-systemd/v22/dbus`](https://pkg.go.dev/github.com/coreos/go-systemd/v22/dbus)                       | guard 依赖单元查询、watchdog 停服与恢复及原服务请求恢复校验         | 只读查询校验属性类型与状态；发送变更时先订阅、持久化原 job，并分别确认 job 终态与 unit/进程/cgroup 状态 |
 | [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite)，通过 `database/sql` 使用                                   | 原执行闭合诊断读取 GARM SQLite 事实；已接入 v1.61.0 / libc v1.79.0  | 原服务身份、只读连接、WAL 可见性与 schema 绑定；禁止通过直接写库制造完成状态                            |
 | [`github.com/BurntSushi/toml`](https://pkg.go.dev/github.com/BurntSushi/toml)，固定 GARM 使用的 v1.6.0                    | 闭合诊断只解码当前 controller 的 database backend/db_file           | 不初始化配置或数据库，不公开秘密配置；当前文件不证明运行连接已加载该内容                                |
 | [`github.com/google/nftables`](https://github.com/google/nftables)                                                        | firewall 通过 netlink 构造并原子提交自有表规则                      | 部署输入校验、自有表边界、规则语义、事务结果及未知发送恢复                                              |
 
 基础库有明确的维护与实际依赖来源。[runc 使用 go-systemd](https://github.com/opencontainers/runc/blob/main/go.mod)，[GoReleaser 使用 go-github](https://github.com/goreleaser/goreleaser/blob/main/go.mod)，[Tailscale 使用 nftables](https://github.com/tailscale/tailscale/blob/main/go.mod)。这些是选型依据，不证明本项目已经集成验收。`google/nftables` 位于 Google 组织。README 同时声明它不是 Google 官方产品，两者不冲突。LXD client 随 LXD 维护。GARM client 与 provider-common 随 GARM 生态维护。产品维护不等同于 SDK 独立的长期 API 稳定承诺。
 
-实施片在 `go.mod` 和 `go.sum` 固定实际导入版本。GARM client 以当前服务基线 v0.2.1 核对 API。provider-common 以 native provider v0.1.5 使用的 v0.1.9 核对协议。LXD client 绑定部署服务版本及使用的 API extensions。其余包在接入时选用核验过的稳定发布；没有适用发布标签时固定核验提交。`modernc.org/libc` 遵循 sqlite 所要求的配套版本。维护动态从上游发布与安全公告核对，不把本文的来源链接当成可浮动构建依赖。
+已有 Go 程序在 `go.mod` 和 `go.sum` 固定实际导入版本。GARM client 以当前服务基线 v0.2.1 核对 API。provider-common 以 native provider v0.1.5 使用的 v0.1.9 核对协议。LXD client 绑定部署服务版本及使用的 API extensions。维护这些程序时，新增依赖仍按真实消费者核验，不据原路线图预建能力。`modernc.org/libc` 遵循 sqlite 所要求的配套版本。维护动态从上游发布与安全公告核对，不把本文的来源链接当成可浮动构建依赖。
 
 SDK 接入保留现有超时、代理、重定向、响应上限和精确整数要求。逐项测试缺省、`null` 与错误类型的区别，不让生成类型的零值掩盖非法响应。写操作只由业务 owner 决定是否发送；关闭会重发业务写入的 SDK 或 transport 重试。SDK 返回错误或 context 结束后，仍沿原请求核验结果。依赖升级检查实际调用面、传递依赖、漏洞和协议变化，不自行增加兼容层。
 
 ### 防火墙接入 nftables 包
 
-原 firewall 读取 nft 文本并调用 CLI。本片改用 `google/nftables v0.3.0` 和 `mdlayher/netlink`，具体入口与恢复见 [原生防火墙](firewall.md)，不保留 CLI fallback。该包不承担 nft 文本解析；纯配置生产入口输出仅覆盖当前受管规则的 JSON，firewall 校验配置并生成规则。配置生成、消费、unit 绑定与切换说明在同一实施片交付，不先建设通用规则语言或解析框架。
+现有 Go firewall 使用 `google/nftables v0.3.0` 和 `mdlayher/netlink`，具体入口与恢复见 [原生防火墙](firewall.md)，不保留 CLI fallback。该包不承担 nft 文本解析；纯配置生产入口输出仅覆盖当前受管规则的 JSON，firewall 校验配置并生成规则。既有配置生成、消费与 unit 合同保留；新目标是否停用该入口须经过等价配置验收。
 
-迁移片保持现有端口、地址、域名对应的网络策略及路由边界。存在性读取完成后，将自有表删除与重建放在一次 netlink batch 中。仅替换 `inet nucleiron` 与 `bridge nucleiron`，其他表保持。配置错误在发送前拒绝；内核拒绝 batch 时原规则保持。发送后超时或回执丢失保留未知结果，先核实际表状态，不重发。
+既有 Go firewall 合同保持端口、地址、域名策略及路由边界。存在性读取完成后，将自有表删除与重建放在一次 netlink batch 中。仅替换 `inet nucleiron` 与 `bridge nucleiron`，其他表保持。配置错误在发送前拒绝；内核拒绝 batch 时原规则保持。发送后超时或回执丢失保留未知结果，先核实际表状态，不重发。
 
-验收在独立网络 namespace 比较原规则与新规则的实际允许、拒绝及转发行为。覆盖首次加载、替换、非法配置、内核事务拒绝、并发及回执丢失。发送和恢复路径的替身检查与真实内核原子性检查分别报告。新实现先校验配置，再提交一次内核事务。原 CLI 的检查与应用流程不变成两次 netlink 写入。实际切换固定配置与二进制版本，旧未知操作按原身份处理。
+该 Go 入口在独立网络 namespace 验证允许、拒绝及转发行为，覆盖首次加载、替换、非法配置、内核事务拒绝、并发和回执丢失。发送/恢复替身与真实内核检查分别报告。程序先校验配置，再提交一次内核事务，不将检查和应用变成两次 netlink 写入。实际切换固定配置与二进制版本，旧未知操作按原身份处理。
 
-## 保持的协议与故障语义
+## 已有 Go 程序的协议与故障语义
 
 ### ScaleSet 的 provider 池身份
 
-当前消费者是 repository ScaleSet。GARM `v0.2.1` 的创建和列表调用都生成 `scaleset_name + "-" + repository_id`，作为 provider 的 `PoolID`。这是 ScaleSet 的派生标识，不是普通 pool 的 UUID。创建调用链见上游 [instance manager](https://github.com/cloudbase/garm/blob/v0.2.1/workers/provider/instance_manager.go)，列表调用链见 [ScaleSet worker](https://github.com/cloudbase/garm/blob/v0.2.1/workers/scaleset/scaleset.go)。保全来源 `provider.py` 按同一规则生成 policy。
+已有 guard 的消费者是 repository ScaleSet。GARM `v0.2.1` 的创建和列表调用都生成 `scaleset_name + "-" + repository_id`，作为 provider 的 `PoolID`。这是 ScaleSet 的派生标识，不是普通 pool 的 UUID。创建调用链见上游 [instance manager](https://github.com/cloudbase/garm/blob/v0.2.1/workers/provider/instance_manager.go)，列表调用链见 [ScaleSet worker](https://github.com/cloudbase/garm/blob/v0.2.1/workers/scaleset/scaleset.go)。保全来源 `provider.py` 按同一规则生成 policy。
 
 guard 的共享 policy 拥有 `controller_id`、`repository_id`、`scaleset_name`、`pool_id` 和 `image_fingerprint`。controller 与 repository 使用小写 UUID；ScaleSet 名称非空且不含环境变量不能承载的 NUL。`pool_id` 必须与名称和 repository ID 的准确拼接一致，镜像使用小写 SHA256。身份字段缺失、null、错误类型或相互不匹配时，watchdog、创建、删除和正常读取均在观察或写入前拒绝。
 
@@ -119,52 +144,16 @@ guard 的共享 policy 拥有 `controller_id`、`repository_id`、`scaleset_name
 
 历史恢复不通过批量改写路径或重新生成意图升级。新版本只接管明确完成前态核验的新操作。旧操作仍保留原身份、程序摘要、回执与恢复入口，直至原 owner 确认终态。新实现遇到不支持的记录格式明确拒绝，不猜测升级。
 
-## 小 PR 的交付顺序
+## 迁移顺序与下一片
 
-每个实现 PR 交付一个可执行、可检查的结果及其必要失败恢复。每片合入前独立审阅；依赖未合入时使用明确依赖的分支，不能把后续切片累积成一个 PR。表中后续项是顺序建议，不授权连续实现全部路线图。
+先独立验证标准路径，再补取消、超时、重启、删除失败及两任务排队场景。随后处理旧域的准确补证、停接和凭据隔离，最后选择生产池切换及原生 CI 消费。每片单独授权和验收，架构选择不授予整条路线的执行权。
 
-| 切片                                                   | 可独立验收的结果                                                        | 包含内容与明确排除                                                                                                                    |
-| ------------------------------------------------------ | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| 结构说明                                               | 审阅者能定位职责、协议和实施顺序                                        | 本文及必要导航；不带历史源码大包，不带运行实现                                                                                        |
-| 专用防火墙重载（已合入）                               | systemd 可消费 Go 入口，检查并原子替换自有 nftables 表                  | 实际入口、规则读取、nft 调用、unit 消费绑定、构建与失败测试；不改端口、域名、路由、其他表或生产服务                                   |
-| guest bootstrap（已合入）                              | 原生 provider 渲染并启动 Go guest 程序，产出相同 ready 回执             | JIT 安装、失败反馈、guest 成品与模板绑定；不启用 ScaleSet，不改 controller 凭据                                                       |
-| provider 异常停接（已合入）                            | Go watchdog 消费 guard 检查接口，异常时停止准确目标的接入               | 身份核验、禁用及读回、未知请求记录、失败停止请求；不迁移 guard 或 records-only，不启用服务                                            |
-| Go guard 正常启动准入（已合入）                        | controller 正常启动前核准配置、程序摘要与 guard 状态                    | 标准库与 x/sys 文件保护、并发锁、intent/latch 拒绝；active 保留容量，所有维护模式启动拒绝；不含 VM 写操作和 records-only              |
-| Go guard watchdog（已合入）                            | 现有 Go watchdog 消费完整健康观察及持久化结果                           | LXD client、systemd 状态查询、挂载与储备、ready/latch 转换、原子写入和中断拒绝；不清除旧操作，不含 VM 写操作和部署                    |
-| Go guard 单次 VM 创建（已合入）                        | 准入后只调用一次 native 创建，准确核验后保存 active                     | provider-common 协议、LXD client 核验、写前意图、原进程结束及未知拒重发；不含删除、释放容量或部署                                     |
-| Go guard VM 删除与容量释放（已合入）                   | 删除准确绑定实例，原 native 结束和 LXD 核验后才释放 provider 容量       | bootstrap 完成、写前记录、实例/可写卷及 operation 核验；未知拒重发，保留 latch，不代替真实 job 完整生命周期验收                       |
-| Go guard 正常只读协议（已合入）                        | GARM 查询 native 版本或准确绑定的实例，guard 记录保持不变               | GetVersion、GetInstance、ListInstances，身份与响应核验；不含 records-only、清记录或部署                                               |
-| ScaleSet 池身份修正（已合入）                          | 实际 ScaleSet 请求按原派生身份通过完整 guard 调用链                     | 共享 policy 校验、实际协议格式回归及错绑定拒绝；不增加普通 pool 模式，不改记录或部署                                                  |
-| 原执行身份采集（已合入）                               | [正在运行的准确 job](execution.md) 具有平台和宿主核对后的独占原身份回执 | GitHub/GARM/LXD/进程/卷身份、guard 永久锁、受保护原件和原结果回读；不含清理、尚未分配执行或部署                                       |
-| [原执行闭合诊断](closure.md)（已合入）                 | 操作者从新 Go 原执行记录取得准确闭合事实及缺口                          | 实际诊断入口消费 GitHub/GARM/LXD/宿主、服务及 SQLite 只读观察；保留原操作与凭据证据缺口，不签许可、不清记录、不释放容量               |
-| [原执行绑定的 watchdog 暂停](pause.md)（已合入）       | 准确终结 job 的原执行取得唯一 timer job 结果与原 worker 排空事实        | 全局 live 准入、固定独立状态 slot、原事件恢复及只读诊断消费；不停止 worker，不恢复 timer，不含 controller/gateway/凭据/许可/清理/部署 |
-| [原执行绑定的 gateway 停止](gateway.md)（已合入）      | 已确认原 watchdog 暂停的执行取得唯一 gateway job 与原进程排空事实       | 共享原 pause 持锁消费、operation 互斥、固定 gateway slot、停止传播检查及原事件恢复；不停止 controller，不处理凭据、许可、清理或部署   |
-| [历史 prepare 原件观察](prepare-evidence.md)（已合入） | 取得准确五件的内部一致性、原字节摘要和 staging 观察                     | 固定只读路径与原锁，不恢复原请求；来源、外部 preflight、凭据和当前安装前态缺口保持                                                    |
-| [当前安装文件比对](installed-evidence.md)（已合入）    | 取得固定 25 文件与原 host-plan 的当前匹配、漂移或具体缺口               | 原锁与固定计划、流式 hash、完整 metadata、空 xattrs 合同及前后复查；保留完整 Host.facts、服务和恢复许可缺口                           |
-| [GARM 管理会话窗口](session.md)（本片）                | 停接窗口取得一次有来源和期限的管理会话，并支持受管消费及到期退役        | 原历史与消费者准入、JWT 认证域轮换、原服务 job、24 小时 TTL、单次登录和实际拒绝；不启用接单，不关闭历史 unknown                       |
-| [records-only 维护窗口](records-recovery.md)           | 在准确许可下清理原 GARM 遗留记录，并回到停止且停接的状态                | 签发、原 job 启动准入、维护读取、清理、停止、guard 恢复和许可退役；不迁用旧许可，不含正常服务恢复或启用接单                           |
-| watchdog GARM 客户端接入（已合入）                     | 原停接流程通过 GARM client 完成同一准确目标禁用与读回                   | 保留身份、输入、时限、未知登录和禁用请求边界；不同时改造 systemd 停止恢复                                                             |
-| watchdog systemd 停止与恢复（已合入）                  | 一次停止请求具有可追踪的原 job 与终态核验                               | go-systemd 订阅、写前记录、原 job 回执及 unit/进程/cgroup 核验；丢失终态不补造成功，旧 CLI 记录保全拒绝自动迁移，不重新接入或部署     |
-| [nftables 包接入](firewall.md)（本片）                 | 结构化部署配置经 Go 包原子替换自有表                                    | 配置生成与校验、netlink、unit 消费和隔离验收；不改变网络策略，不保留 CLI fallback                                                     |
-| 服务与版本安装窗口                                     | 在准确前态中停止服务、安装一个版本，并恢复或保留可恢复状态              | systemd 原 job、文件事务、回滚与配置漂移检查；不将通用文件复制单独提前交付                                                            |
-| 凭据消费与连接                                         | 一次已绑定操作建立并验证 disabled 连接，故障后保留可解释结果            | signer、凭据证明、受保护记录、repository/ScaleSet 回执及只读恢复；稳定 rebind 到达后再确定最小闭包                                    |
-| VM 终态与恢复                                          | 对一个准确 job 区分用例通过和仅资源回收，并验证资源归零                 | GitHub/GARM/LXD/进程/cgroup 证据和必要服务恢复；四种任务终态按实际接口验证，不冒充生产全验收                                          |
-| 运行版本切换                                           | 自托管消费已合入的准确 Go 版本，并通过真实验收                          | 停接、旧操作处理、成品校验、切换、回退和读回；不与纯文档合并绑定，不在本地重构中执行                                                  |
+推荐首片只有一个可观察结果：在另行批准的可销毁测试域，不接自有 guard/gate，以固定上游版本完成一个 job 的新 VM、固定 Kiln、真实检查和标准删除。必要变更限标准配置、无身份基础镜像/必要 bootstrap、无生产秘密的 probe workflow 和相应用例。优先复用既有合适对象，不默认新建仓库、宿主或长期凭据。
 
-每次开始后续片前，依据已经到位的消费者重新检查边界。若某一行包含两个可独立验收结果，再拆小。同一恢复不变量跨层时保留在一片，确保中间版本也能安全运行。
+验收核 job/runner/VM 对应、基础镜像与 Kiln digest、私有包有权成功及无权拒绝、guest 无管理凭据或宿主挂载、必要网络拒绝、根盘上限，以及标准删除 operation 成功和实例/根盘消失。这是部署配置的场景验收，不是每个 job 的常驻多平台证明服务。故障和连续排队在后续片补齐后，才选择生产启用。
 
-已合入组件的具体行为与检查分别由 [firewall](README.md)、[bootstrap](bootstrap.md)、[watchdog](watchdog.md) 和 guard 各入口文档维护。采集和原结果回读由 [execution](execution.md) 维护，诊断由 [closure](closure.md) 维护，watchdog 暂停由 [pause](pause.md) 维护，gateway 停止由 [gateway](gateway.md) 维护。历史原件与当前安装分别由 [prepare 原件观察](prepare-evidence.md)和[安装文件比对](installed-evidence.md)维护。本片由[管理会话窗口](session.md)维护，其余片再按真实依赖选择。日志采集继续消费 rsyslog 与 logrotate，不加入无消费者的 Go 日志程序。
+首片目前仍待选择，不执行 GitHub 连接、凭据签发、VM 或现场操作。它排除旧 unknown 恢复、旧服务/密钥切换、生产接单、扩容及旧代码删除。源码与配置切换另片交付。
 
-## 构建、验证与后续切换
+新生产池接单前，原恢复 owner 须确认旧写者、队列和凭据不会影响新域。换 controller/project 名称不能隔离同仓库的旧 token 或原 LXD 请求。按准确现场计划保留必要恢复入口、退役能力并保持失败后停接；不自动恢复旧 controller，也不回滚数据库。旧程序继续按[历史恢复合同](records-recovery.md)解释。
 
-新自有程序使用 Go 工具链直接构建、测试。`go.mod` 与[构建说明](README.md)固定当前工具链和依赖版本。当前已接入 `x/sys`、GARM client、provider-common、LXD client、go-github、go-systemd、modernc SQLite 和 BurntSushi TOML。其余目标依赖随上表对应的真实消费者接入，新构建入口不依赖 Python。先联网取得并核验固定依赖，再在已准备的缓存中关闭网络下载进行构建。Linux 系统行为在独立 Linux 测试目录验证。
-
-第三方源码归档仍使用已核版本和摘要。自有 Go module 不直接合并两份第三方 vendor 树。需要的库按实际 import 固定版本，并验证与原协议相符。发布包标注源码提交、依赖、目标平台与各成品摘要。构建记录证明来源，不代替运行许可。
-
-每片至少验证受影响的业务边界、真实 CLI 协议和失败路径，再检查差异与秘密扫描。服务、挂载、LXD 和远端 API 的替身结果只证明离线行为。真实宿主或 VM 验收单独绑定准确版本与操作。未变输入的旧检查继续复用，不为拆 PR 重复全部运行。
-
-后续切换消费本次实现合入 `main` 的准确提交。切换前先停止接入，核旧任务、unknown 操作和可回退成品。安装后核服务实际加载版本与真实任务结果。旧任务未结清时不通过更名或迁移记录强行切换。本片修改源码中的消费入口，不修改宿主已安装的程序或服务。
-
-## 交付范围
-
-结构说明随实现保持更新，运行实现按独立业务结果交付。108 份本地历史源码及既有构建检查保全，不整体进入实现 PR。本片交付 GARM 管理会话窗口及其现有 Go 消费者。其他凭据供应、完整连接、records-only 和运行切换仍待后续实施。运行版本以稳定交付为准，不拼接修复中的文件。
+已有 Go 程序的构建和检查仍由 [runner README](README.md#构建与检查) 维护，依赖与命令不因本次文档改变。已合入源码、当前安装版本、目标架构和真实运行验收是不同事实。文档发布不安装服务，不切换 external provider，也不证明标准路径已经可用。

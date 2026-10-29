@@ -1,8 +1,10 @@
 # Provider 异常停接
 
+本文维护已有自研 guard 链路的程序合同，输入、状态与拒绝规则保持。新的[正常架构](architecture.md)直接使用上游 provider，不以本入口为默认运行前置。
+
 `provider-watchdog` 供专用 root oneshot 服务消费。它调用现有 guard 的 `--watchdog-check` 接口。返回 `0` 表示本次正常，`75` 表示 guard 正忙；没有未结请求时，两者均直接结束。其他退出、启动失败或超时进入停接流程。Go 入口不改写 guard 状态，也不承担正常 provider 准入或 records-only 启动校验。
 
-已交付异常停接程序、service 和 timer 模板。[Go guard watchdog](guard-watchdog.md) 提供本入口消费的 `--watchdog-check`，包含必要的 guard 状态持久化；[正常启动准入](startup.md)为另一入口。VM 写操作与 records-only 恢复分别交付。当前只构建和离线验证，不安装模板、不启动 timer，不恢复已停止的 Python 流程。完整 Go 运行版本仍依赖后续 provider 实现及实际部署验收。
+已交付异常停接程序、service 和 timer 模板。[Go guard watchdog](guard-watchdog.md) 提供本入口消费的 `--watchdog-check`，包含原 guard 状态持久化；[启动准入](startup.md)为另一入口。已有 VM 写操作合同保留，未实现的 records-only 不作为默认后续片。本文不安装模板、不启动 timer，也不恢复旧 Python 流程。目标正常运行的停接/告警优先使用标准运维能力，不要求部署本套 watchdog。
 
 GARM client v0.2.1 已负责登录、controller 身份查询、ScaleSet 查询和禁用。本片用 go-systemd v22.7.0 替换 systemctl 停止调用，并交付原 job 的观察与恢复。写前记录和恢复判断仍由 watchdog 持有，SDK 不负责重试或决定原请求是否完成。
 

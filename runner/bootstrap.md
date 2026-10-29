@@ -1,5 +1,7 @@
 # Guest bootstrap
 
+本文描述已有 Go guest 程序及配套模板。新的[目标架构](architecture.md)优先使用上游模板和必要镜像配置，不把预装本程序作为默认前置；本文原消费者的安装合同保持。
+
 `runner-bootstrap` 在新 guest 中安装 JIT 身份并启动 runner 服务。它消费原生 provider 渲染的 [runner-install.tmpl](templates/runner-install.tmpl)，通过标准输入接收实例配置。自有程序使用 [Go 1.27.3](README.md#构建与检查)，只依赖标准库。
 
 ## 消费与结果

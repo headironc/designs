@@ -1,5 +1,7 @@
 # GitHub 只读观察凭据
 
+本文保留自有管理入口及其原凭据、记录和 unknown 合同。新的[正常运维路径](architecture.md)使用标准 GARM 配置、API/CLI，不依赖该自有窗口或状态机。
+
 本片为现有执行采集、闭合诊断、watchdog 暂停和 gateway 停止供应受管 GitHub installation token。供应、消费者租约和原 token 退役共同构成一个结果。源码与隔离验收不授权真实签发、撤销、登录、部署或启用 runner。
 
 ## 入口与来源

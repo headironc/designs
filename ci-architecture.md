@@ -22,7 +22,7 @@ agents、Nucleus 和 designs 各自维护仓库原生 CI、独立审查及分支
 
 ## 发布与外部操作
 
-普通检查不持发布凭据或管理权限。发布入口固定准确产物和目标，执行后读取实际结果。请求结果未知时沿原对象确认，不能用重新检查或重复发送代替恢复。
+普通检查不持发布凭据或管理权限。发布入口固定准确产物和目标，执行后读取实际结果。发布结果未知时沿原对象确认，不能用重新检查或重复发布代替恢复。runner 正常回收采用的上游幂等合同由[运行架构](runner/architecture.md#正常删除与异常停接)维护。
 
 版本固定以单次执行和实际发布为单位，不将整包长期冻结作为普遍要求。操作日志、凭据和生产配置不进入源码。源码合入不自动部署、扩容或激活 runner。
 
@@ -30,47 +30,45 @@ agents、Nucleus 和 designs 各自维护仓库原生 CI、独立审查及分支
 
 本次移除旧 CI 的共享执行器、固定配方、自动入口和专属依赖。旧源码仍可从 Git 历史读取，外部运行原件、原操作身份及未知结果继续保留。旧操作由其原恢复责任处理，不改写成新流程成功，也不因源码删除而重复发送。
 
-runner 的 Go 代码及文档保持原 owner，已合入的资源诊断与恢复成果保留。下节继续约束 runner 和 Kiln 的资源隔离、容量与原操作恢复，不要求恢复旧 S/P 或准入平台。相关部署和后续实施仍按各自授权进行。
+runner 已有 Go 代码及历史诊断、恢复合同保留。正常目标由[精简架构](runner/architecture.md)维护，旧执行闭合及 unknown 由[历史恢复协议](runner/records-recovery.md)维护。下节只拥有跨库消费与不可信池边界，不恢复旧 S/P 或自有资源闭合准入平台。
 
 ## runner 与 Kiln
 
-Rust CI 与 Halo 共用 GARM/LXD 和生命周期管理，使用 Nucleus 仓库级不可信执行池。每个 job 使用全新 VM，初始总容量保持 1。可信控制器与发布任务留在独立信任域。第一版优先共用兼容的任务容器镜像，分别运行检查配方。任务名称不同不构成拆池依据。
+Rust CI 与 Halo 目标共用 GARM v0.2.1、上游 LXD provider v0.1.5 和仓库级不可信 VM 池。每个 job 使用新 VM，初始容量为 1；可信控制面和发布任务位于独立信任域。第一版优先共用兼容的 Kiln 容器镜像，任务名称不同不构成拆池依据。
 
-本节记录共用架构和接入方案。文档交付不授权产品改动、镜像发布、配置切换或扩容。下文固定源码说明已有行为，准备材料只说明其实际覆盖。完整 VM 执行、私有拉取及连续排队仍待真实验收。
+本节拥有跨库消费、权限与验收边界。[运行架构](runner/architecture.md)拥有正常生命周期、组件版本、最小定制和迁移顺序。架构已采用，标准路径的真实 VM、私有拉取及故障验收尚未完成；本文不授权部署、凭据、工作流切换或扩容。
 
 ### 两层镜像与共用架构
 
-VM 基础镜像提供系统、runner、guest Docker、网络和 bootstrap 基础。Kiln 容器镜像提供检查所需的 Rust、Bun、Node、PostgreSQL、浏览器和 nginx。前者由 runner 能力维护，后者由 Kiln 发布能力维护；Nucleus 拥有实际消费兼容性。容器镜像分开后仍可使用同一个 VM 池。
+VM 基础镜像提供系统、官方 runner、guest Docker 和必要 bootstrap 配置，不含旧实例身份。Kiln 提供 Rust、Bun、Node、PostgreSQL、浏览器及 nginx。基础镜像与 Kiln 独立发布，Nucleus 拥有工具和检查兼容性。容器镜像分开后仍可使用同一 VM 池。
 
 ```mermaid
 flowchart TD
-    Policy["仓库工作流与准确检查输入"] --> Actions["GitHub Actions<br/>候选、矩阵、run/job"]
-    Actions --> GARM["GARM / 仓库级 ScaleSet<br/>不可信任务调度"]
-    GARM --> Lifecycle["统一生命周期管理<br/>预留容量、记录原操作、恢复"]
-    Lifecycle --> LXD["LXD / QEMU<br/>固定 VM 基础镜像"]
-    LXD --> VM["每个 job 的全新 VM<br/>临时 runner + guest Docker"]
-    Kiln["Kiln<br/>已审配方、独立发布、固定 digest"] --> Container["任务容器<br/>Rust 或 Halo 检查配方"]
-    VM --> Container
-    Container --> Evidence["检查结果与诊断原件"]
-    Lifecycle --> Closure["真实执行身份与资源闭合证据"]
-    Evidence --> Result["本仓库原生 CI 作业结果"]
-    Closure --> Result
+    Workflow["Nucleus 原生 workflow<br/>候选与检查矩阵"] --> Actions["GitHub Actions<br/>队列、分配、job 结论"]
+    Actions --> GARM["GARM v0.2.1<br/>ScaleSet、JIT 与实例状态"]
+    GARM --> Provider["上游 LXD provider v0.1.5"]
+    Provider --> LXD["LXD<br/>VM、根盘、operation 与配额"]
+    LXD --> VM["每 job 新 VM<br/>官方 runner + guest Docker"]
+    VM --> Container["GitHub 原生 job container"]
+    Kiln["Kiln 独立发布<br/>固定私有 registry digest"] --> Container
+    Container --> Checks["原生检查结果与诊断 artifact"]
+    GARM --> Cleanup["上游标准回收"]
+    Cleanup --> LXD
+    Cleanup --> Operations["清理异常：运行侧停接和告警"]
 ```
 
-图中 Rust 与 Halo 是两种任务选择。任务容器是依赖封装，VM 承担不可信执行隔离。作业分别保留检查结果和资源闭合结果，不经过独立冻结控制器或自定义准入平台。计算资源可在权限与容量边界内共用，这不要求共用 CI 业务规则、发布版本或恢复流程。guest 的 Docker 权限不能等同于宿主 Docker 权限。GitHub 分别定义 ephemeral runner 的单 job 注销与机器后续清理。[runner 契约](https://docs.github.com/en/actions/reference/runners/self-hosted-runners)
+VM 是不可信执行的隔离边界，任务容器只封装工具。guest Docker 权限不等于宿主 Docker 权限。GitHub ephemeral 的单 job 注销与基础设施清理分别由相应组件负责；正常回收不再等待自有跨平台封印。[GitHub runner 合同](https://docs.github.com/en/actions/reference/runners/self-hosted-runners)
 
-| 所有者                      | 独占事实与责任                                         | 跨能力接口                                   |
-| --------------------------- | ------------------------------------------------------ | -------------------------------------------- |
-| 本仓库原生 CI               | 候选、检查选择、依赖环境和作业结果                     | 明确执行输入；分别读取检查结果和闭合结果     |
-| GitHub Actions 与 GARM 适配 | 平台 run/job、真实分配、注册对象、请求与回执           | 返回平台事实，不自行判断 PR 合格             |
-| runner 生命周期             | 容量、执行与资源对应、期限、取消、回收及未知操作恢复   | 申请执行、查询原执行、请求取消、读取闭合结果 |
-| runner 部署维护             | 生效版本、安装前态、服务恢复及记录兼容性               | 固定 VM/bootstrap/provider 版本与恢复程序    |
-| Kiln 发布                   | 配方、构建原件、发布操作和 registry digest             | 不可变镜像描述及兼容输入                     |
-| Nucleus 消费者              | Rust/Halo 检查内容、工具版本、夹具、缓存用途及结果要求 | 固定业务检查配方与环境核验                   |
+| 所有者                       | 事实与责任                                   | 跨库消费                                  |
+| ---------------------------- | -------------------------------------------- | ----------------------------------------- |
+| GitHub Actions 与 Nucleus CI | 候选、矩阵、run/attempt/job、结论和取消/超时 | 按原生 checks、覆盖和仓库保护接纳         |
+| GARM 与上游 provider         | runner 注册、ScaleSet、实例生命周期与恢复    | 使用支持的配置、API/CLI，不增设镜像状态机 |
+| LXD                          | VM、根盘、operation 和 project 配额          | 正常回收接受其成功合同；异常保留平台事实  |
+| runner 部署维护              | 固定版本、VM 镜像、网络、容量和告警          | 启用前验证安全配置及失败停接              |
+| Kiln 发布                    | 配方、构建来源、发布与 registry digest       | 提供固定镜像及兼容输入                    |
+| Nucleus 消费者               | 实际 Rust/Halo 检查、夹具、缓存和结果要求    | 保留选检及业务覆盖，不自研容器调度器      |
 
-同一执行请求与相同输入返回原记录；相同身份而输入不同则拒绝。取消接口只记录原执行的取消意图。查询和恢复沿原 operation 及真实资源进行，结果分别表达工作结论、资源闭合、候选适用性。生命周期和部署各保留一个事实所有者；watchdog 复用生命周期入口，不新增平行状态机。GARM DB、GitHub、LXD 和 systemd 仍各自拥有对应外部事实。
-
-runner 的 [Go 包选型](runner/architecture.md#已采用的-go-包)统一维护 SDK、系统接口和防火墙依赖。各包承担协议与技术访问，runner 仍拥有准入、容量和恢复判断。选型已接受，代码按独立实施片接入；文档合入不表示运行依赖或部署已切换。
+初始使用一个 ScaleSet，min-idle=0、max-runners=1，并配置专用 LXD project/profile 的 VM、CPU、内存和根盘上限。标准配额不独立证明内核孤儿消失，磁盘限额也不证明物理空闲；存储池和镜像缓存的空闲告警属于部署责任。
 
 ### Rust 与 Halo 的实际消费链
 
@@ -81,7 +79,7 @@ runner 的 [Go 包选型](runner/architecture.md#已采用的-go-包)统一维�
 | Rust 分类与发现 | `check-inputs.ts` 核事件候选及 Git 父关系；比较不可信时执行完整检查。`check-packages.ts` 读取 Cargo metadata 并补齐受影响消费者 | 沿用检查完整性；分类结果不能自证可信最低检查计划     |
 | Rust tools      | Bun 类型检查与工具回归，部分回归实际调用 Rust/Clippy                                                                            | 核固定工具链，保留独立工具检查                       |
 | Rust checks     | Rust 1.99.0、Clippy、独立 nightly-2026-09-06 rustfmt；setup 用 sudo apt 安装依赖，以 hosted 镜像和系统包生成缓存指纹            | 迁移时交付匹配的非 root 环境和指纹；不能仅改 runs-on |
-| Rust packages   | 已与 Halo 使用同一固定 digest 的依赖镜像；逐包 build/test/rustdoc，Domain 四个 shard，Nucleus 分 http/rest 两组                 | 保留全部所选分片及分组，逐项绑定执行与闭合证据       |
+| Rust packages   | 已与 Halo 使用同一固定 digest 的依赖镜像；逐包 build/test/rustdoc，Domain 四个 shard，Nucleus 分 http/rest 两组                 | 保留全部所选分片及分组，逐项绑定准确 job 结果        |
 | Halo website    | 同一依赖镜像，另运行网站生成、类型、测试、构建及浏览器验收；job 期限 30 分钟，浏览器原件保留 7 天                               | 保留 nginx、TLS、浏览器、后台进程与 artifact 语义    |
 
 [输入分类器](https://github.com/headironc/nucleus/blob/fc73557bf5b1a63459bc3b67b0eb6de36d229965/tools/check-inputs.ts)与[包检查器](https://github.com/headironc/nucleus/blob/fc73557bf5b1a63459bc3b67b0eb6de36d229965/tools/check-packages.ts)拥有选检及测试分组规则。Rust package 的 `--test-threads 4` 只限制测试 harness，不限制 Cargo 编译并发。workflow 的 `max-parallel: 8` 只限制矩阵调度，不证明 VM 容量为 8，也不授权扩容。
@@ -102,54 +100,21 @@ Rust 与 Halo 同池的前提是同一仓库授权范围、相同不可信权限
 
 既有单 VM 准备规格为 8 vCPU、16 GiB 内存和 100 GiB 根盘。这是配方输入，不是 Rust 容量实测。当前缺少冷拉取、峰值内存、编译磁盘及排队耗时证据，不能宣称统一镜像或拆镜像更快。Rust 首次接入保留总容量 1；不足时拒绝或报告资源限制，不自动扩容、降低检查或缩短回收。
 
-可信编排先固定执行请求、配方、候选、环境和权限；GitHub 分配后再从可信事实补齐 run/attempt/job、runner、GARM instance、VM、宿主及进程关系。JIT/ephemeral 只约束单 job，不证明创建时已经绑定指定 PR。
-
-执行请求固定实际 commit/tree、目标基线、所验证前缀、检查配方及矩阵维度、Kiln digest、VM 基础镜像、runner/bootstrap/provider 版本和资源规格。执行分配后建立以下关联，不从 guest 上传的 JSON 自行认定：
-
-`run / attempt / job / runner → GARM instance → VM UUID → host boot_id / QEMU PID+starttime / cgroup / writable volumes`
-
-一次执行尝试对应一台全新 VM。基础设施失败后如需新尝试，保存与原尝试的关系及各自资源归属；不能换一台 VM 后沿用旧执行身份。PR 编号用于关联消费者，检查证据仍按实际语义输入复用。
-
-保留一个任务的初始容量。容量槽从创建开始，覆盖 bootstrap、运行、注销和全部资源回收。成功、失败、取消、超时分别保留 job 结论；资源闭合结果与业务检查结果分开。存在 QEMU、cgroup、VM、卷或原操作残留时，不释放容量。
-
-容量预留必须早于任何可能创建资源的动作。GitHub 或 GARM 显示 job 已结束，不授权 guard 提前释放槽位。队列可以继续等待，但后续任务不能在原执行未闭合时获得新 VM。当前单任务模型不自动扩展为多 VM 池。
-
 ### 生命周期与恢复
 
-| 阶段             | 正常推进                           | 失败、取消或未知结果                                     |
-| ---------------- | ---------------------------------- | -------------------------------------------------------- |
-| 等待依赖和容量   | 固定输入及期限，取得容量预留       | 期限到后停止新分配；已发 dispatch 仍查原 run             |
-| 创建和 bootstrap | 保存 provider 原操作与实际 VM 身份 | 查询原操作，阻止迟到创建或重复创建                       |
-| 注册与分配       | 绑定真实 runner/job，核匹配关系    | 区分未分配、错配、注册失败，不伪装成测试失败             |
-| 容器初始化       | 用短期 token 拉取准确私有 digest   | 记录环境准备失败，进入回收；不改用旧镜像                 |
-| 运行             | 按固定配方、输入和期限执行         | 保存真实失败、取消或超时，不因本地等待结束认定远端已停止 |
-| 终结与回收       | 核原 job 终态，注销并销毁原资源    | 回收超时仍占容量，保留原操作及恢复责任                   |
-| 闭合             | 全部条件满足后解除 guard 占用      | 任何身份或终态不明都保持未闭合                           |
+正常容量与实例状态由 GARM 管理。GitHub 负责 job 结论，provider/LXD 负责 VM 和根盘。job 完成、失败、取消或超时后，使用上游完成消息、超时及对账路径回收。controller 重启沿 GARM 持久化状态恢复，不另建正常 active/intent 状态机。
 
-阶段期限写入原执行，不因服务重启、重复事件或等待者退出重置。容器初始化期限不额外延长已约定的 job 总期限。当前 Halo 的 30 分钟与受控 probe 的 5 分钟只按原消费者覆盖使用，不推广成所有任务的默认值。
+正常回收按[上游删除合同](runner/architecture.md#正常删除与异常停接)消费服务终态及幂等恢复，不把 HTTP 接纳或单侧记录消失当作清理成功。旧 Go/Python 的不重发与原回执合同保留在[历史恢复协议](runner/records-recovery.md#历史执行闭合与占用)，不改写旧 unknown。
 
-闭合要求同时确认：原执行终态已核明；runner 已注销且不能继续接单；GARM 原实例已终结或经支持路径清理；VM、可写卷、快照及临时凭据已清理；原 QEMU 已退出，cgroup 无残留成员；相关创建、停止和删除操作均终结，没有可能迟到创建资源的原请求。
+清理失败、LXD 不可用或状态矛盾时，运行侧停止新分配并告警，保留原对象和日志。优先采用标准 disabled 或控制器运维路径，并验证禁止新建与继续回收的真实语义。不用忽略 IaaS 错误的 force-delete 伪装成功，也不承诺任意网络故障下的固定完成时限。
 
-| 工作结果                        | 回收结果           | 对准入的含义                               |
-| ------------------------------- | ------------------ | ------------------------------------------ |
-| success                         | closed             | 可以接纳该执行覆盖的检查证据               |
-| success                         | pending 或 unknown | 工作检查成功，但执行尚未闭合，不最终放行   |
-| failure、cancelled 或 timed_out | closed             | 保存失败结论，由编排决定是否有新的合法尝试 |
-| 任意结果                        | cleanup_failed     | 保留容量并进入恢复，不继续接单             |
+job 结论与基础设施健康是两项事实。CI 仍完整核实际候选、所选矩阵和业务结果；已完成检查不再等待自有 closed seal 才允许 PR 通过。清理异常通过运行侧停接/告警处理，不改写 job 结论或复活旧共享准入平台。原程序消费历史封印的规则只适用于旧操作。
 
-候选已经失效时，迟到的成功和资源闭合只结束旧执行，不恢复旧准入。watchdog 与正常路径使用同一生命周期规则，不另造删除规则。
+可信工作流固定候选、检查输入及镜像。GitHub 的 run/attempt/job 与 GARM runner、LXD 实例通过平台事实关联，guest 自述不授予管理权限。初始标准路径的验证可保留准确对应关系，但不建立每 job 的 QEMU/PID 多平台证明服务。
 
-控制器重启先恢复未闭合记录和原资源身份，再处理新请求。宿主 boot 变化后，旧 PID 消失并不证明存储、runner 或外部操作已经闭合。没有捕获到的历史 QEMU 身份保持证据缺口。单写者锁只能防本地重复动作，不能宣称远端端到端 exactly-once。
+仓库级不可信池内的所有 workload 都按不可信代码隔离。labels 和 max=1 不提供执行前逐 job 拒绝保证。所有可能进入该池的 workflow 均须核 token、Secret/Environment 及入口权限；不能只保护最终被接纳的检查。可信控制器、App 私钥、管理会话、发布凭据和宿主 socket 不进入 guest。执行后的报告拒绝不能撤回已暴露秘密。
 
-迁后登记可能启动 manager，ScaleSet 创建可能出现 GitHub 成功而 GARM 保存失败，补偿删除也可能未知。恢复须核对应平台原对象；GARM 列表为空不授权重新创建。既有未知 login POST 不重放，不通过改 GARM 数据库补造登记或终态。
-
-GARM 的消息接纳不是 PR 准入代理。已选执行边界为仓库级不可信池：池内所有 workload 都按不可信代码隔离，只有匹配可信请求的执行证据可进入 gate。非预期 job 可能占用计算资源；如实际分配到它，保留真实分配、拒绝证据接纳，并按同一生命周期完整回收，不提前释放容量。labels、max=1 和执行后的核对不提供执行前逐 job 拒绝保证；本方案不把这一更强能力作为已选要求。
-
-该选择不放宽凭据边界。所有可能进入此池的工作流都必须满足不可信执行权限要求，而不只是最终被 gate 接纳的工作流。控制面私钥、管理会话、发布凭据及宿主 socket 不得因另一个 workflow 名称或未经核实的 Environment 条件进入 guest。启用前核仓库的实际工作流入口、token 权限及 Secret/Environment 授权；若无法阻止特权工作流或凭据进入该池，就保持池关闭。执行后拒绝报告不能撤回已经暴露的凭据。
-
-阶段期限在执行前固定。取消只是对原执行的请求；超时不等于远端终止。创建、删除或安装响应丢失时查原对象及 operation，不重复发送。宿主重启延续原容量、期限和恢复责任；watchdog 调用同一生命周期规则。
-
-Kiln 构建与发布分离，发布固定源码和产物 digest。Nucleus 用短期 job token 在 container 初始化阶段拉取 private 镜像，然后 checkout 准确候选。控制面凭据、管理 socket 和宿主目录不进入候选 VM。缓存与 artifact 按来源、输入、run/attempt、环境及信任域隔离，候选产物不得成为特权执行代码。
+阶段和 job 超时按消费者配置验证，取消回执不代替 job 终态。Kiln 用短期 job token 在原生 container 初始化阶段拉取 private digest，再 checkout 准确候选；不以长期 PAT 或事后登录替代。缓存与 artifact 沿下节按输入和信任域隔离。
 
 ### 缓存与发布输入
 
@@ -165,41 +130,31 @@ Kiln 构建与发布分离，发布固定源码和产物 digest。Nucleus 用短
 
 Nucleus 固定 `ghcr.io/headironc/kiln@sha256:…`，job 仅取得所需 `packages: read`，通过 `container.credentials` 使用短期 `GITHUB_TOKEN`。验收使用没有预热镜像、没有残留登录的全新 VM，覆盖有权拉取与无权拒绝。初始化拉取成功后再运行真实 Halo；checkout 后手工登录或添加长期 PAT 不属于替代路径。
 
-当前发布候选只接纳 build attempt 1，artifact 保留一天。它们是既有消费者边界，不是新架构的永久参数。若选片要求支持 rerun 或更长留存，必须同时更新发布消费者、证据绑定和验收；原件过期后的重建形成新身份，不归入旧发布。
+上述发布候选只接纳 build attempt 1，artifact 保留一天。它们是既有消费者边界，不是新架构的永久参数。若选片要求支持 rerun 或更长留存，必须同时更新发布消费者、证据绑定和验收；原件过期后的重建形成新身份，不归入旧发布。
 
-镜像升级验证工具链及完整 Halo 消费；回退消费已核旧 digest，仍保存原执行和生命周期历史。已接纳安装/WAL、首次服务入口及 guard 修复只按实际覆盖复用，不替代真实权限、VM 和私有拉取验收。
+镜像升级验证工具链及完整 Halo 消费；回退消费已核旧 digest，仍保存原执行和平台历史。已有旧程序的离线检查不替代标准路径的权限、VM 和私有拉取验收。
 
-升级分别核验 Kiln 工具链及运行用户、runner 的 job/container 协议、VM 内核与存储、GARM/provider 的 API 和补偿行为，以及生命周期记录的读取兼容性。真实 Halo 还须覆盖 workspace 挂载、临时数据库、nginx、浏览器和 TLS 夹具；不能假定原 hosted job 的 sudo 安装步骤可直接用于新容器。
+升级分别核验 Kiln 工具链及运行用户、runner 的 job/container 协议、VM 内核与存储、GARM/provider 的 API 和补偿行为，以及 GARM 状态与上游恢复兼容性。真实 Halo 还须覆盖 workspace 挂载、临时数据库、nginx、浏览器和 TLS 夹具；不能假定原 hosted job 的 sudo 安装步骤可直接用于新容器。
 
-部署时先停新接单并排空旧执行，再激活完整配套版本；无法排空的原操作保留其固定恢复程序。回退代码不回滚 GARM DB/WAL，也不改写原执行的恢复程序记录。未知记录版本或兼容性无法证明时，停止相关恢复动作并保留容量。
+部署时先停新接单并排空旧执行，再激活完整配套版本；无法排空的原操作保留其固定恢复程序。回退代码不回滚 GARM DB/WAL，也不改写原执行的恢复程序记录。未知记录版本或兼容性无法证明时，停止相关恢复动作并保持停接。
 
 ### 接入缺口与最小实施顺序
 
-GARM v0.2.1、native LXD provider v0.1.5 和固定私有 VM 基础镜像已有准备原件。安装/WAL、首次服务入口及 guard pin 修复也有准备原件。首次 repository/ScaleSet、真实 VM 单任务闭合与 Kiln 私有包消费仍待验收。正在开发的创建恢复入口及其替身测试不作为本节稳定实现依据。上线前由原 runner owner 提交准确成品和匹配证据。
+当前缺口首先是标准配置、无身份基础镜像、业务消费适配和真实验收，不是继续补齐旧自研控制器。已有 Go 程序及合成测试证明其声明范围，不能替代新正常路径的部署证据。旧安装、登录、连接及资源请求的 unknown 由原 owner 保全，不因本次架构选择重试或关闭。
 
-现有单任务验收程序 `lifecycle.py` 的 `finish` 要求 ScaleSet disabled、GARM 实例列表为空。`absent_resources` 要求专用项目无实例、可写 VM 卷或快照，并核原 QEMU/cgroup 与 LXD 操作终态。该程序 SHA-256 为 `b49b153fd0e4904ece6793b14f9be9e81142b79c8479d9314cd9cd6edd32823f`，原件位于 dev 的 `runner-deployment/halo-20261026/vm-restore-guard-pin-20261026/`。这是固定准备原件的源码结论，不是当前宿主观测，也不是团队运行时依赖。
+推荐首片是在另行批准的可销毁测试域，不接自有 guard/gate，完成一个 job 的新 VM、固定 Kiln、真实检查和标准删除。网络、最小凭据与根盘边界随首片验证。准确必要变更、验收及排除由[迁移顺序](runner/architecture.md#迁移顺序与下一片)维护；目前不执行 probe、连接 GitHub 或创建 VM。
 
-连续接单与该停接验收模型的衔接仍有缺口。runner 接入片说明停接条件、上一执行的闭合依据及下一次创建的放行条件，并实证两任务排队。仅换 runs-on 或调 max 不足以闭合这些责任。原登记、创建及未知结果恢复继续由 runner owner 单写。旧 sudo 拒绝和未知 login POST 保留，不由消费适配另找通道重试。
+后续再分别验证同一标准基线的取消、超时、controller 重启、删除失败及两任务排队，然后处理旧域停接/凭据隔离和生产池切换。优先复用既有合适对象，不默认新建仓库或长期凭据。Rust 和 Halo 的消费适配可按各自独立结果推进，不要求先完成另一类任务。
 
-| 实施片             | 单一可观察结果                                                          | 必要内容与排除                                                                            |
-| ------------------ | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| 共同 runner 基础   | 一个受控 job 绑定真实执行身份，四种终态及失败恢复均能完整闭合           | 复用已接纳准备，完成登记/创建恢复、真实权限和连续排队；容量 1，不扩容                     |
-| Rust 首个消费者    | 完整所选 package 矩阵在共同池执行，缺项、错配或未闭合无法形成可接纳结果 | 配套镜像兼容、初始化拉取、缓存边界和闭合消费；分类、tools、格式/Clippy 及汇总暂留现有环境 |
-| Halo 消费者        | 同一基础设施完成网站、真实后端及浏览器验收并闭合                        | 保留 TLS、nginx、进程清理和原件语义；不复制生命周期                                       |
-| 后续环境或容量优化 | 已接入消费者完成独立环境迁移或有依据的容量提升                          | 分镜像、迁移其余 Rust jobs、扩容分别选片；不从本次文档合入推导授权                        |
+| 验收面           | 启用前观察                                                             |
+| ---------------- | ---------------------------------------------------------------------- |
+| 正常 job         | 原生 job/runner/VM 对应，基础镜像与 Kiln digest 正确，检查覆盖真实完整 |
+| 选检与覆盖       | 未知输入保守全检；所选 package、shard 和 group 无意外缺项或错配        |
+| 初始化与失败     | 区分 bootstrap、私有拉取、环境及业务失败，保留真实结论并进入上游回收   |
+| 正常删除         | provider/LXD 原删除 operation 成功，实例和根盘按标准合同消失           |
+| 取消、超时、重启 | GitHub 终态与 GARM 的清理、对账和启动恢复均有实际用例                  |
+| 异常与排队       | 删除失败不假报成功；告警及停接可用，容量配置与两任务排队行为符合预期   |
+| 凭据与网络       | guest 无管理能力、宿主挂载及未授权网络路径；私有包有权成功、无权拒绝   |
+| 缓存与镜像       | 信任域、工具、运行用户、挂载、数据库/TLS/browser 夹具和回退版本匹配    |
 
-Rust 的 workflow 适配、可信检查计划及镜像消费兼容可与共同基础开发并行。真实 Rust 接入依赖共同生命周期和已核可消费镜像，不依赖 Halo 浏览器先接入；共用镜像的发布与验证可以支持两个消费者。各实施片分别选择和交付，不把该表当作一次性全路线授权。
-
-| 验收场景            | 可接纳的观察结果                                                                                   |
-| ------------------- | -------------------------------------------------------------------------------------------------- |
-| 正常 Rust/Halo 执行 | 准确候选、配方、矩阵项、run/attempt/job、runner、VM 和镜像一致；工作与闭合结果分别核验             |
-| 选检与覆盖          | 未知输入保守全检；所有所选 package、Domain shard、Nucleus group 均有结果；意外跳过、失败与错配拒绝 |
-| 初始化或测试失败    | 区分 bootstrap、私有拉取、环境核验和业务测试失败；保留原结论，仍完整回收                           |
-| 取消与超时          | 核原 job 的真实 cancelled/timed_out；取消请求回执和 run 总结不能代替 job 终态；回收未完仍占容量    |
-| 创建/删除响应丢失   | 核原 intent、GitHub/GARM/LXD 对象和平台 operation；单侧残留或未知结果不重发、不释放槽              |
-| 控制器/宿主重启     | 原期限、资源身份和容量占用延续；未捕获的历史身份保持缺口，不从旧 PID 消失推断闭合                  |
-| 连续排队与残留      | 两个 job 的第二次创建晚于第一次完整闭合；QEMU、cgroup、卷、runner 或原操作残留均阻止放行           |
-| 缓存与包权限        | 无预热、无残留登录的新 VM 通过初始化拉取；无权拉取与跨信任域缓存污染被拒绝                         |
-| 镜像变更与回退      | 版本、输入摘要、运行用户、挂载和数据库夹具匹配；保留旧 operation 恢复，不用旧镜像掩盖新初始化失败  |
-
-模型及替身测试只覆盖状态与拒绝规则。权限、私有包初始化、资源隔离、连续排队及四种 job 终态需要真实证据；既有未变输入的有效结果继续复用。检查绿色不单独证明资源闭合，完整闭合也不能替代业务检查或恢复已失效候选的准入。
+场景验收使用薄用例和原生日志，不建设常驻资源闭合门禁。部署与源码交付分开，故障未覆盖时保持生产池关闭。迁移不要求补造每条旧请求成功，但新池接单前必须证明旧写者、队列和凭据不会影响新域。

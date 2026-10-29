@@ -1,5 +1,7 @@
 # 原执行身份采集
 
+本文服务已有自研执行记录及[历史恢复合同](records-recovery.md#历史执行闭合与占用)。新正常 CI 不要求逐 job 生成本套原件或取得闭合封印，详见[当前架构](architecture.md)。
+
 `runner-admin capture-execution` 为一个已经分配且正在运行的准确 job 保存原身份。入口消费受保护的可信请求，再读取 GitHub、GARM、LXD 和宿主事实。回执只证明采集时的对应关系，不证明 job 成功、资源闭合或清理资格。尚未分配、bootstrap 失败和历史缺失身份不在本入口的接纳范围。
 
 采用[首次 disabled 连接](connection.md)时，传入 `--disabled-connection-sha256=<producer>`。入口在共享租约内核固定连接槽的原封印。原 controller、仓库、ScaleSet、pool 和镜像与当前 guard 及两端实际观察相符，才接受采集。该参数不授予启用许可，也不替代新执行的凭据和准入检查。
