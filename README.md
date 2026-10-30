@@ -48,6 +48,10 @@ bun run format README.md
 
 工作流在 PR 和 `main` push 上运行依赖安全、格式、类型、内部链接与工具回归，仅持源码读取权限。当前使用 GitHub hosted `ubuntu-latest`；真实调度结果与 required checks 由平台交付另行核验。格式通过不代表文档结构或安全检查通过。依赖准备失败时保留原错误，核对工具版本、网络和锁文件；用相同锁重新准备后再检查，不通过删除检查或修改锁文件掩盖失败。工具或配置修复使用普通 PR，并保持 manifest 与锁文件一致；回退同样恢复配套源码、配置和锁。
 
+工作流的 checkout、setup-node 和 setup-bun 使用声明支持 Node 24 的固定 Action。Action runtime 由 runner 提供，与 `package.json` 声明的项目 Node 26.8.1 分别管理。runner 最低版本为 2.327.1。checkout 保持 `persist-credentials: false`；setup-node 从版本文件安装项目 Node，并以 `package-manager-cache: false` 关闭自动缓存。
+
+升级 Action 时核对官方 tag、完整 commit、`action.yml` 与兼容性变更，通过普通 PR 更新完整 SHA。保留检查入口、事件和权限，核验真实 PR 与 main 运行中的 Action 初始化和全部检查。失败时保留原 run 与日志，在同片修复或通过普通 PR 恢复可用的配套 pin。历史 Node 20 pin 仅供追溯，恢复前仍须核验平台支持。
+
 旧执行器与配方的准确版本保留在 Git 历史。原操作和未知结果的恢复继续使用原身份与原材料，不通过恢复旧门禁或兼容桥接实现。
 
 ## 依赖安全检查
