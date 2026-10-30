@@ -5,8 +5,8 @@
 ## 当前设计
 
 - [CI 与运行边界](ci-architecture.md)：原生 CI、独立审查、分支保护和发布职责；清理异常由运行侧停接和告警处理。
-- [Rust 与 Halo 共用 runner](ci-architecture.md#runner-与-kiln)：共用基础设施、两层镜像、不可信池边界、生命周期、缓存和接入验收；文档收录不表示已部署。
-- [Runner 精简架构与迁移边界](runner/architecture.md)：GARM v0.2.1 + 上游 LXD provider v0.1.5 承担正常生命周期，GitHub job container 使用固定 Kiln；保留最小配置、镜像和消费适配。
+- [Runner 与 Nucleus CI](ci-architecture.md#runner-与-nucleus-ci)：两层镜像、真实消费者和不可信池边界；区分已验成功路径、未完故障矩阵和生产 CI 切换。
+- [Runner 精简架构与迁移边界](runner/architecture.md)：GARM v0.2.1 + 上游 LXD provider v0.1.5 承担正常生命周期，GitHub job container 使用 Nucleus 维护的固定镜像；说明必要定制和后续迁移顺序。
 - [历史恢复协议](runner/records-recovery.md)：旧自研执行的完整闭合、原身份和 unknown 合同，以及准确历史源码、现场成品和报告的追溯入口。
 
 ## 设计与实施
