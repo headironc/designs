@@ -2,11 +2,12 @@
   "name": "designs",
   "private": true,
   "type": "module",
-  "packageManager": "bun@1.4.2",
+  "packageManager": "bun@1.4.4",
   "engines": {
     "node": "26.8.1"
   },
   "scripts": {
+    "security:check": "bun audit",
     "format:check": "node scripts/format.ts --check",
     "format": "node scripts/format.ts --write",
     "typecheck": "tsc --noEmit",
