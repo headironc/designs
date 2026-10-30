@@ -1,6 +1,6 @@
 # 历史执行与恢复责任
 
-本文集中维护已退役自研 runner 的历史恢复责任。新正常路径采用[上游架构](architecture.md)，不消费本协议作为逐 job 或 PR 的门禁。源码删除不结束旧执行，不产生重试、清理、服务启停、凭据变更或迁移许可。
+本文集中维护已退役自研 runner 和已取消自托管试验的历史恢复责任。当前 CI 使用[标准 GitHub hosted runner](../ci-architecture.md)，不消费本协议作为逐 job 或 PR 的门禁。源码删除不结束旧执行，不产生重试、清理、服务启停、凭据变更或迁移许可。
 
 ## 原版本与现场原件
 
@@ -18,6 +18,14 @@
 | 旧维护窗口设计与来源    | [历史恢复协议](https://github.com/headironc/designs/blob/23eb693a797fae054571fbb691df259b61cb153e/runner/records-recovery.md)                                                                                                                                                                                                                                                                                                                                                 | 原 Python 来源、旧许可与尚未实现的 Go 窗口设计；不继续该路线图 |
 
 历史 Python 来源属于原 owner 保全的 `halo-20261026` 包，包含 lifecycle、records-only、session、first-connection 及 credential-rebind 等不同版本。原来源清单和摘要决定解释范围。不要 import 或执行旧 Python，不将不同版本的记录或许可混用，不复制归档源码或新增兼容解析器。
+
+## 已取消的上游自托管试验
+
+上游路线的最后一版 designs 说明保留在 `474f9e36cc5478c010ce5512463d2d83e2788457` 的[架构](https://github.com/headironc/designs/blob/474f9e36cc5478c010ce5512463d2d83e2788457/runner/architecture.md)及[消费者与已验范围](https://github.com/headironc/designs/blob/474f9e36cc5478c010ce5512463d2d83e2788457/ci-architecture.md#镜像发布与已验范围)。它们用于解释当时的 GARM v0.2.1、LXD provider v0.1.5、专用 VM 与 probe，不再是当前架构或待执行计划。
+
+历史已验范围包括标准 VM 成功、一次受控失败后的自动回收，以及固定私有镜像的短期 job-token 冷消费。完整故障矩阵和生产 CI 切换未获完整验收，不能因路线取消改写为成功。后续单项现场结果仍以原 owner 持有的准确 run、操作和回执为准，不从这份历史版本推定终态。
+
+取消路线后不再补齐取消、超时、重启、排队或多槽矩阵，也不为完成旧计划启用生产池。原恢复 owner 继续保全安装、登录、连接、资源请求及其 unknown，核明仍可能生效的旧写者、队列、凭据和原请求。现场配置、DB/WAL/SHM、App、镜像及恢复材料按原授权保全；文档删除不授权停止服务、删除资源或清除凭据。
 
 ## 历史执行闭合与占用
 
@@ -41,7 +49,7 @@ GARM controller、repository、ScaleSet 内部 ID、GitHub ScaleSet ID、instanc
 
 ## 未知结果与恢复边界
 
-旧 Login、mint、registration、repository/ScaleSet 创建、rebind、安装、服务请求及资源写入的 unknown 沿原身份、原意图和原回执恢复。先确认原执行结束，再核原平台对象和结果。不换 operation、目录、实例名或程序语言重发，不以输出失败推定远端未写入，不重置数据库或补造完成封印。新正常 provider 的幂等删除合同只适用于新路径，不能覆盖这些旧操作。
+旧 Login、mint、registration、repository/ScaleSet 创建、rebind、安装、服务请求及资源写入的 unknown 沿原身份、原意图和原回执恢复。先确认原执行结束，再核原平台对象和结果。不换 operation、目录、实例名或程序语言重发，不以输出失败推定远端未写入，不重置数据库或补造完成封印。上游试验的 provider 幂等删除合同只解释该路径，不能覆盖这些旧操作。
 
 固定历史恢复集合包含 controller-start-verification、first-connection acquisition 和 credential-rebind amendment。保留它们各自的来源、锁、原 Login 和其他未结判断；新会话、密钥轮换或新 controller 不关闭旧 unknown。令牌到期、服务端拒绝和撤销是不同事实。原到期后拒绝报告保留其准确范围，不能改写成即时撤销，也不删除丢失签发回执的 unknown。
 
@@ -57,4 +65,4 @@ GARM controller、repository、ScaleSet 内部 ID、GitHub ScaleSet ID、instanc
 
 `inspect-installed` 的原范围是固定历史 host-plan 的 25 个文件及原锁、计划的复核。文件匹配不证明当前服务、boot、API、数据库、资源、额外 watchdog 或完整 Host.facts。两个报告均不签启动、重试、清理或迁移许可；退出码 0 只表示报告输出成功。读取拒绝、缺锁、来源漂移和观察期间变化保持 unknown，不能解释为不存在或绕过文件保护。
 
-源码退役不取得现场读取许可，也不判定既有报告已运行或历史 unknown 已结束。迁移由原恢复 owner 按准确授权核明旧写者、队列、凭据和原请求不会影响新域；未解决的历史责任保持可追溯。
+源码退役不取得现场读取许可，也不判定既有报告已运行或历史 unknown 已结束。必要安全收口由原恢复 owner 按准确授权核明旧写者、队列、凭据和原请求的状态；未解决的历史责任保持可追溯。

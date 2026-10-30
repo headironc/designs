@@ -1,13 +1,12 @@
 # Designs
 
-本仓库维护跨仓库设计及 [runner 架构与恢复导航](runner/README.md)。正常运行采用 GARM 与上游 LXD provider，具体版本、职责及迁移边界见[精简架构](runner/architecture.md)。agents、Nucleus 与 designs 分别维护原生 CI 和业务检查。旧共享执行器、固定配方和自动准入已退役。
+本仓库维护跨仓库 CI 设计及[历史 runner 恢复导航](runner/README.md)。agents、Nucleus 与 designs 分别维护原生 CI 和业务检查，执行使用标准 GitHub hosted runner。自托管 CI 建设与生产切换路线已取消；旧共享执行器、固定配方和自动准入已退役。
 
 ## 当前设计
 
-- [CI 与运行边界](ci-architecture.md)：原生 CI、独立审查、分支保护和发布职责；清理异常由运行侧停接和告警处理。
-- [Runner 与 Nucleus CI](ci-architecture.md#runner-与-nucleus-ci)：两层镜像、真实消费者和不可信池边界；区分已验成功路径、未完故障矩阵和生产 CI 切换。
-- [Runner 精简架构与迁移边界](runner/architecture.md)：GARM v0.2.1 + 上游 LXD provider v0.1.5 承担正常生命周期，GitHub job container 使用 Nucleus 维护的固定镜像；说明必要定制和后续迁移顺序。
-- [历史恢复协议](runner/records-recovery.md)：旧自研执行的完整闭合、原身份和 unknown 合同，以及准确历史源码、现场成品和报告的追溯入口。
+- [CI 与运行边界](ci-architecture.md)：标准 hosted CI、独立审查、分支保护和发布职责。
+- [Nucleus CI 与依赖镜像](ci-architecture.md#nucleus-ci-与依赖镜像)：真实 hosted 消费者、镜像发布及本地验收边界。
+- [历史恢复协议](runner/records-recovery.md)：原身份、unknown 和历史执行的恢复合同，以及准确源码、现场成品和报告的追溯入口。
 
 ## 设计与实施
 
