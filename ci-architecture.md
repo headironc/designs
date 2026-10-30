@@ -129,7 +129,9 @@ Nucleus 的[镜像发布与冷拉取合同](https://github.com/headironc/nucleus
 
 当前 probe 固定消费 `ghcr.io/headironc/nucleus-ci@sha256:80ae416d4bc7287532c0974d25390c5bc9b27cd62defe4e64860b501414b4592`。job 仅取得所需 `packages: read`，通过 `container.credentials` 使用短期 `GITHUB_TOKEN`。独立发布 job 的写权限不进入不可信 VM。checkout 后手工登录或添加长期 PAT 不属于初始化拉取的替代路径。
 
-已验范围分为两项：镜像的短期 job-token 冷消费，覆盖非 root、私有 PG、双 Chromium 和 133 个薄消费者测试；标准 VM 成功路径，覆盖原生初始化拉取、完整 platform 包、PG 与临时目录清理，以及 GARM 自动回收。后者核对了原 LXD 删除 operation 成功和对应实例、根盘缺席。operation 的 resources 为空，关联依赖唯一实例和时间窗，不能描述为独立逐资源证明。
+镜像的短期 job-token 冷消费已验，覆盖非 root、私有 PG、双 Chromium 和 133 个薄消费者测试。标准 VM 成功路径已验原生初始化拉取、完整 platform 包、PG 与临时目录清理，以及 GARM 自动回收。
+
+一次受控失败也已验收：完整 platform 的 40 个测试通过后，预定步骤以 42 退出。原 PG 清理、诊断上传、容器收尾及 GARM 自动回收均已核对。成功与受控失败场景均核原 LXD 删除 operation 成功，以及对应实例、根盘缺席。operation 的 resources 为空，关联依赖唯一实例和时间窗，不能扩为双实例的独立逐资源证明。
 
 已验 guest 挂载包括自身的 Actions 路径和 Docker socket；隔离边界是 VM。guest 未获得宿主管理 socket、App 私钥或管理 token。匿名 registry 401 仅在 dev host 观测，guest 无权拉取负例尚未执行，不能写成全部权限拒绝已验。
 
@@ -139,7 +141,7 @@ Nucleus 的[镜像发布与冷拉取合同](https://github.com/headironc/nucleus
 
 ### 接入缺口与最小实施顺序
 
-标准成功路径和对应源码已交付。故障、取消、超时、bootstrap 失败、专用控制器重启、容量、删除异常及连续排队的完整矩阵仍未验收。旧安装、登录、连接及资源请求的 unknown 由原 owner 保全，不因成功 probe 重试或关闭。
+标准成功路径、一次受控失败与自动回收已验，对应源码已交付。其余失败、取消、超时、bootstrap 失败、专用控制器重启、容量、删除异常及连续排队仍待验收。旧安装、登录、连接及资源请求的 unknown 由原 owner 保全，不因 probe 通过而重试或关闭。
 
 后续场景沿已审基线和单池容量逐片验证，准确顺序由[迁移边界](runner/architecture.md#迁移顺序与下一片)维护。失败开关的源码存在不证明现场验收通过；进行中的 run 也不计为已验。复用成功证据时，核模板字节和消费者输入未变。
 
